@@ -1,0 +1,16 @@
+﻿{
+  "name": "whatsapp-scheduler-bot",
+  "version": "1.0.0",
+  "description": "Bot para agendamento de mensagens no WhatsApp",
+  "main": "scripts/scheduler.js",
+  "scripts": {
+    "start:scheduler": "node scripts/scheduler.js",
+    "start:sync": "node scripts/sync-members.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.42.0",
+    "node-fetch": "^2.7.0"
+  }
+}
