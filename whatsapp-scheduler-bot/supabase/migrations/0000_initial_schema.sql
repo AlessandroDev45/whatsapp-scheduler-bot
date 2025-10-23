@@ -1,4 +1,4 @@
-﻿-- ============================================
+-- ============================================
 -- SCRIPT COMPLETO - BANCO DE DADOS
 -- Execute no SQL Editor do Supabase
 -- ============================================
@@ -106,3 +106,41 @@ CREATE POLICY "Permitir acesso total para service_role" ON public.usuarios_autor
 CREATE POLICY "Permitir acesso total para service_role" ON public.agendamentos FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY "Permitir acesso total para service_role" ON public.sessoes_comando FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY "Permitir acesso total para service_role" ON public.historico_envios FOR ALL USING (auth.role() = 'service_role');
+
+-- ============================================
+-- TABELA 5: Auditoria de Agendamentos
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.auditoria_agendamentos (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agendamento_id UUID NOT NULL REFERENCES public.agendamentos(id) ON DELETE CASCADE,
+  usuario_id UUID NOT NULL REFERENCES public.usuarios_autorizados(id) ON DELETE CASCADE,
+  acao VARCHAR(20) NOT NULL CHECK (acao IN ('criado', 'editado', 'ativado', 'desativado', 'deletado')),
+  dados_anteriores JSONB,
+  dados_novos JSONB,
+  criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE public.auditoria_agendamentos IS 'Registra todas as alterações feitas nos agendamentos';
+COMMENT ON COLUMN public.auditoria_agendamentos.acao IS 'Tipo de ação: criado, editado, ativado, desativado, deletado';
+COMMENT ON COLUMN public.auditoria_agendamentos.dados_anteriores IS 'Estado anterior do agendamento (JSON)';
+COMMENT ON COLUMN public.auditoria_agendamentos.dados_novos IS 'Estado novo do agendamento (JSON)';
+
+-- Índices para otimização
+CREATE INDEX IF NOT EXISTS idx_auditoria_agendamento ON public.auditoria_agendamentos(agendamento_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_usuario ON public.auditoria_agendamentos(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON public.auditoria_agendamentos(criado_em DESC);
+
+-- Habilitar RLS
+ALTER TABLE public.auditoria_agendamentos ENABLE ROW LEVEL SECURITY;
+
+-- Política de acesso
+CREATE POLICY "Permitir acesso total para service_role" ON public.auditoria_agendamentos FOR ALL USING (auth.role() = 'service_role');
+
+-- Adicionar coluna modificado_por na tabela agendamentos
+ALTER TABLE public.agendamentos ADD COLUMN IF NOT EXISTS modificado_por UUID REFERENCES public.usuarios_autorizados(id);
+
+COMMENT ON COLUMN public.agendamentos.modificado_por IS 'Último usuário que modificou o agendamento';
+
+-- ============================================
+-- FIM DO SCRIPT
+-- ============================================
