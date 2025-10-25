@@ -748,6 +748,53 @@ Digite */novo* para começar novamente.`
       return new Response('Menu enviado', { status: 200 })
     }
 
+    // Comando /cadastrar_grupo - cadastrar grupo manualmente
+    if (messageText.trim().toLowerCase() === '/cadastrar_grupo') {
+      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+
+      const avisoMsg = `⚠️ *CADASTRAR GRUPO MANUALMENTE*
+
+⚠️ *ATENÇÃO - LEIA COM CUIDADO!*
+
+Este comando permite cadastrar um grupo manualmente no sistema. Você precisará fornecer:
+
+1️⃣ *JID do grupo* (ex: 120363318862188145@g.us)
+2️⃣ *Nome do grupo* (ex: Grupo da família)
+
+━━━━━━━━━━━━━━━━━━━━
+
+⚠️ *CUIDADOS IMPORTANTES:*
+
+❌ *NÃO digite o JID errado!*
+   • Se errar, o sistema tentará enviar para um grupo inexistente
+   • Isso causará erros no scheduler
+
+❌ *NÃO invente JIDs!*
+   • Use apenas JIDs reais de grupos existentes
+   • Copie e cole para evitar erros
+
+✅ *Como obter o JID correto:*
+   • Encaminhe uma mensagem do grupo para você mesmo
+   • O JID aparece no formato: 120363XXXXXXXXXX@g.us
+   • Ou peça ao administrador do sistema
+
+━━━━━━━━━━━━━━━━━━━━
+
+Digite *1* para continuar
+Digite */cancelar* para voltar`
+
+      await sendPrivateMessage(senderJid, avisoMsg)
+
+      await supabaseAdmin.from('sessoes_comando').insert({
+        telefone: sender,
+        comando: 'cadastrar_grupo',
+        estado: 'aguardando_confirmacao',
+        dados: {}
+      })
+
+      return new Response('Aviso enviado', { status: 200 })
+    }
+
     // Comando /ajuda - mostrar ajuda
     if (messageText.trim().toLowerCase() === '/ajuda') {
       await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
@@ -775,6 +822,10 @@ ${isAdmin ? '👑 *Modo:* Administrador\n\n' : ''}📌 *COMANDOS PRINCIPAIS:*
       }
 
       ajudaMsg += `
+
+👥 */cadastrar_grupo*
+   Cadastrar um grupo manualmente
+   (Use quando a API não conseguir buscar grupos)
 
 ❓ */ajuda*
    Mostrar esta mensagem de ajuda
@@ -1653,6 +1704,175 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
           // Opção inválida
           await sendPrivateMessage(senderJid, '❌ Opção inválida!\n\n⚡ Digite *1* para continuar\n🔄 Digite *2* para recomeçar\n\n💡 _Ou use /cancelar para sair_')
           nextState = 'aguardando_escolha_sessao'
+        }
+        break
+
+      // ========== CADASTRAR GRUPO ==========
+      case 'aguardando_confirmacao':
+        if (session.comando === 'cadastrar_grupo') {
+          if (messageText === '1') {
+            nextState = 'aguardando_jid_grupo'
+            await sendPrivateMessage(senderJid, `📝 *Digite o JID do grupo*
+
+⚠️ *ATENÇÃO:* Cole o JID completo!
+
+📋 *Formato correto:*
+120363318862188145@g.us
+
+❌ *NÃO digite:*
+• Apenas números
+• Sem o @g.us
+• JIDs inventados
+
+💡 *Como obter o JID:*
+1. Encaminhe uma mensagem do grupo para você
+2. Copie o JID que aparece
+3. Cole aqui
+
+⚡ _Digite /cancelar para sair_`)
+          } else {
+            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+            await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
+            nextState = ''
+          }
+        }
+        break
+
+      case 'aguardando_jid_grupo':
+        if (messageText === '/cancelar') {
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
+          nextState = ''
+          break
+        }
+
+        // Validar formato do JID
+        const jidRegex = /^\d+@g\.us$/
+        if (!jidRegex.test(messageText.trim())) {
+          await sendPrivateMessage(senderJid, `❌ *JID inválido!*
+
+O formato correto é: *120363318862188145@g.us*
+
+Você digitou: ${messageText}
+
+⚠️ *Verifique:*
+• Tem números antes do @?
+• Termina com @g.us?
+• Não tem espaços?
+
+💡 Tente novamente ou digite */cancelar*`)
+          nextState = 'aguardando_jid_grupo'
+          break
+        }
+
+        updatedSessionData.grupo_jid = messageText.trim()
+        nextState = 'aguardando_nome_grupo'
+        await sendPrivateMessage(senderJid, `✅ *JID salvo!*
+
+${messageText}
+
+━━━━━━━━━━━━━━━━━━━━
+
+📝 *Agora digite o NOME do grupo*
+
+💡 *Exemplos:*
+• Grupo da família
+• Trabalho - Equipe
+• Amigos da escola
+
+⚠️ *Digite exatamente como quer que apareça no sistema!*
+
+⚡ _Digite /voltar para mudar o JID_
+⚡ _Digite /cancelar para sair_`)
+        break
+
+      case 'aguardando_nome_grupo':
+        if (messageText === '/cancelar') {
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
+          nextState = ''
+          break
+        }
+
+        if (messageText === '/voltar') {
+          nextState = 'aguardando_jid_grupo'
+          await sendPrivateMessage(senderJid, `📝 *Digite o JID do grupo novamente*
+
+⚡ _Digite /cancelar para sair_`)
+          break
+        }
+
+        updatedSessionData.grupo_nome = messageText.trim()
+        nextState = 'confirmando_cadastro_grupo'
+
+        await sendPrivateMessage(senderJid, `📋 *CONFIRME OS DADOS:*
+
+👥 *Nome:* ${updatedSessionData.grupo_nome}
+🆔 *JID:* ${updatedSessionData.grupo_jid}
+
+━━━━━━━━━━━━━━━━━━━━
+
+✅ Digite *1* para CONFIRMAR
+❌ Digite *2* para CANCELAR
+
+⚡ _Digite /voltar para mudar o nome_`)
+        break
+
+      case 'confirmando_cadastro_grupo':
+        if (messageText === '/cancelar' || messageText === '2') {
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
+          nextState = ''
+          break
+        }
+
+        if (messageText === '/voltar') {
+          nextState = 'aguardando_nome_grupo'
+          await sendPrivateMessage(senderJid, `📝 *Digite o NOME do grupo novamente*
+
+⚡ _Digite /cancelar para sair_`)
+          break
+        }
+
+        if (messageText === '1') {
+          // Salvar no banco
+          const { error: insertError } = await supabaseAdmin
+            .from('grupos_usuario')
+            .insert({
+              usuario_id: user.id,
+              grupo_jid: updatedSessionData.grupo_jid,
+              grupo_nome: updatedSessionData.grupo_nome,
+              tipo: 'grupo',
+              ativo: true
+            })
+
+          if (insertError) {
+            await sendPrivateMessage(senderJid, `❌ *Erro ao cadastrar grupo!*
+
+${insertError.message}
+
+Digite */cadastrar_grupo* para tentar novamente.`)
+          } else {
+            await sendPrivateMessage(senderJid, `✅ *GRUPO CADASTRADO COM SUCESSO!*
+
+👥 *${updatedSessionData.grupo_nome}*
+🆔 ${updatedSessionData.grupo_jid}
+
+━━━━━━━━━━━━━━━━━━━━
+
+Agora você pode usar este grupo em seus agendamentos!
+
+📋 Digite */novo* para criar um agendamento
+📱 Digite */menu* para voltar ao menu`)
+          }
+
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+        } else {
+          await sendPrivateMessage(senderJid, `❌ Opção inválida!
+
+Digite *1* para confirmar ou *2* para cancelar`)
+          nextState = 'confirmando_cadastro_grupo'
         }
         break
 

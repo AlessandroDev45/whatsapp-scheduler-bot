@@ -91,8 +91,37 @@ async function enviarMensagem(destinatario, mensagem) {
     }
 }
 
+async function wakeUpEvolutionAPI() {
+    console.log('🔔 Acordando Evolution API...');
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos
+
+        const response = await fetch(`${EVOLUTION_API_URL}/instance/fetchInstances`, {
+            method: 'GET',
+            headers: { 'apikey': EVOLUTION_API_KEY },
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+            console.log('✅ Evolution API está acordada!');
+            return true;
+        }
+    } catch (error) {
+        console.log('⚠️  Evolution API pode estar dormindo, aguardando...');
+        // Aguardar mais 10 segundos
+        await new Promise(resolve => setTimeout(resolve, 10000));
+    }
+    return true;
+}
+
 async function processarAgendamentos() {
     try {
+        // Acordar Evolution API antes de processar
+        await wakeUpEvolutionAPI();
+
         console.log('Iniciando verificação de agendamentos...');
         const agora = new Date().toISOString();
 
