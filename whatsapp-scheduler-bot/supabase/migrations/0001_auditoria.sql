@@ -27,7 +27,12 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON public.auditoria_agendamen
 ALTER TABLE public.auditoria_agendamentos ENABLE ROW LEVEL SECURITY;
 
 -- PolÃ­tica de acesso
-CREATE POLICY "Permitir acesso total para service_role" ON public.auditoria_agendamentos FOR ALL USING (auth.role() = 'service_role');
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'auditoria_agendamentos' AND policyname = 'Permitir acesso total para service_role') THEN
+    CREATE POLICY "Permitir acesso total para service_role" ON public.auditoria_agendamentos FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
 
 -- Adicionar coluna modificado_por na tabela agendamentos
 ALTER TABLE public.agendamentos ADD COLUMN IF NOT EXISTS modificado_por UUID REFERENCES public.usuarios_autorizados(id);

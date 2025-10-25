@@ -243,7 +243,13 @@ serve(async (req: Request) => {
     }
 
     // Extrair informações da mensagem
-    const messageText = (body.data.message?.conversation || body.data.message?.extendedTextMessage?.text || '').trim()
+    const messageText = (
+      body.data.message?.conversation ||
+      body.data.message?.extendedTextMessage?.text ||
+      body.data.message?.buttonResponseMessage?.selectedButtonId ||
+      body.data.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+      ''
+    ).trim()
     const isGroup = body.data.key.remoteJid.endsWith('@g.us')
     const isChannel = body.data.key.remoteJid.endsWith('@lid') // Canais/Listas do WhatsApp
 
@@ -497,6 +503,26 @@ Se você acredita que isso é um erro, entre em contato com o administrador.`
 
     // 2. Processar QUALQUER mensagem no grupo ou canal (oferecer menu)
     if (isGroup || isChannel) {
+      // SINCRONIZAR GRUPO AUTOMATICAMENTE (NÃO-BLOQUEANTE)
+      const grupoJid = body.data.key.remoteJid
+      const grupoNomeSimples = grupoJid.split('@')[0]
+
+      // Executar sincronização em background (sem bloquear o fluxo)
+      supabaseAdmin
+        .from('grupos_usuario')
+        .upsert({
+          usuario_id: user.id,
+          grupo_jid: grupoJid,
+          grupo_nome: grupoNomeSimples,
+          tipo: 'grupo',
+          ativo: true,
+          ultima_sincronizacao: new Date().toISOString()
+        }, {
+          onConflict: 'usuario_id,grupo_jid'
+        })
+        .then(() => console.log(`✅ Grupo sincronizado: ${grupoNomeSimples}`))
+        .catch((err: unknown) => console.error('❌ Erro ao sincronizar grupo:', err))
+
       await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
 
       const saudacao = getSaudacao()
@@ -545,8 +571,11 @@ Se você acredita que isso é um erro, entre em contato com o administrador.`
           'aprovando_mensagem': '✅ *Aprovando a mensagem*',
           'editando_mensagem_manual': '✏️ *Editando a mensagem manualmente*',
           'escolhendo_destinatario': '👥 *Escolhendo destinatário*',
+          'selecionando_destinatario': '👥 *Selecionando destinatário da lista*',
           'escolhendo_horario': '⏰ *Escolhendo horário*',
           'escolhendo_dias': '📅 *Escolhendo dias da semana*',
+          'escolhendo_termino': '📆 *Escolhendo data de término*',
+          'aguardando_data_termino': '📅 *Digitando data de término*',
           'aguardando_confirmacao': '✅ *Confirmando agendamento*'
         }
 
@@ -654,9 +683,12 @@ Digite */novo* para começar novamente.`
           'aprovando_mensagem': 'perguntando_melhorar',
           'editando_mensagem_manual': 'aprovando_mensagem',
           'escolhendo_destinatario': 'aprovando_mensagem',
+          'selecionando_destinatario': 'escolhendo_destinatario',
           'escolhendo_horario': 'escolhendo_destinatario',
           'escolhendo_dias': 'escolhendo_horario',
-          'aguardando_confirmacao': 'escolhendo_dias'
+          'escolhendo_termino': 'escolhendo_dias',
+          'aguardando_data_termino': 'escolhendo_termino',
+          'aguardando_confirmacao': 'escolhendo_termino'
         }
 
         const estadoAnterior = estadosVoltar[session.estado]
@@ -677,9 +709,10 @@ Digite */novo* para começar novamente.`
           'aguardando_mensagem': '📝 *Digite a mensagem* que você deseja agendar.\n\n⚡ _Digite /cancelar para sair_',
           'perguntando_melhorar': '💡 Quer que eu melhore sua mensagem com IA?\n\n1️⃣ ✨ Sim, melhore!\n2️⃣ 👍 Não, está boa\n\n💬 Digite o número da opção desejada',
           'aprovando_mensagem': 'Gostou da mensagem melhorada?\n\n1️⃣ ✅ Aprovar\n2️⃣ ↩️ Usar original\n3️⃣ ✏️ Editar manualmente',
-          'escolhendo_destinatario': '📋 Digite o ID do destinatário (grupo ou contato)\n\n⚡ _Digite /voltar para mudar a mensagem_',
+          'escolhendo_destinatario': '📋 Digite o nome do grupo ou número do contato\n\n⚡ _Digite /voltar para mudar a mensagem_',
           'escolhendo_horario': '⏰ Escolha o horário de envio\n\n⚡ _Digite /voltar para mudar o destinatário_',
-          'escolhendo_dias': '📅 Escolha os dias da semana\n\n⚡ _Digite /voltar para mudar o horário_'
+          'escolhendo_dias': '📅 Escolha os dias da semana\n\n⚡ _Digite /voltar para mudar o horário_',
+          'escolhendo_termino': '📆 Escolha quando o agendamento deve terminar\n\n⚡ _Digite /voltar para mudar os dias_'
         }
 
         await sendPrivateMessage(senderJid, `↩️ *Voltando...*\n\n${mensagensRetorno[estadoAnterior] || 'Voltando para etapa anterior...'}`)
@@ -904,10 +937,14 @@ ${isAdmin ? '👑 *Modo:* Administrador\n' : ''}
           ? `\n   👤 Criador: ${ag.criador.nome} (${ag.criador.telefone})`
           : ''
 
+        // Mostrar nome do destinatário se disponível, senão mostrar JID
+        const destinatarioDisplay = ag.destinatario_nome || ag.destinatario_id
+        const tipoEmoji = ag.destinatario_tipo === 'grupo' ? '👥' : '📱'
+
         listaMsg += `
 ${numero}. ${status} ${mensagemPreview}
    ⏰ ${ag.hora_envio} | 📅 Dias: ${diasTexto}
-   📱 ${ag.destinatario_tipo}: ${ag.destinatario_id}${criadorInfo}
+   ${tipoEmoji} ${destinatarioDisplay}${criadorInfo}
 ━━━━━━━━━━━━━━━━━━━━`
       })
 
@@ -958,7 +995,7 @@ ${numero}. ${status} ${mensagemPreview}
           .from('agendamentos')
           .select('id')
           .eq('usuario_id', user.id)
-          .order('created_at', { ascending: false })
+          .order('criado_em', { ascending: false })
 
         if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
           await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado na sua lista.\n\n📋 Digite */listar* para ver seus agendamentos.`)
@@ -1047,7 +1084,7 @@ Apenas o criador ou um administrador pode deletar.`)
           .from('agendamentos')
           .select('id')
           .eq('usuario_id', user.id)
-          .order('created_at', { ascending: false })
+          .order('criado_em', { ascending: false })
 
         if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
           await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado na sua lista.\n\n📋 Digite */listar* para ver seus agendamentos.`)
@@ -1097,6 +1134,10 @@ Apenas o criador ou um administrador pode editar.`)
       const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
       const diasTexto = agendamento.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
 
+      // Mostrar nome do destinatário se disponível, senão mostrar JID
+      const destinatarioDisplay = agendamento.destinatario_nome || agendamento.destinatario_id
+      const tipoEmoji = agendamento.destinatario_tipo === 'grupo' ? '👥' : '📱'
+
       const editarMsg = `✏️ *EDITAR AGENDAMENTO #${agendamentoId}*
 
 📋 *Dados atuais:*
@@ -1105,7 +1146,7 @@ Apenas o criador ou um administrador pode editar.`)
 ${agendamento.mensagem}
 
 👤 *Destinatário:*
-${agendamento.destinatario_id}
+${tipoEmoji} ${destinatarioDisplay}
 
 ⏰ *Horário:*
 ${agendamento.hora_envio}
@@ -1147,7 +1188,7 @@ ${diasTexto}
           .from('agendamentos')
           .select('id')
           .eq('usuario_id', user.id)
-          .order('created_at', { ascending: false })
+          .order('criado_em', { ascending: false })
 
         if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
           await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
@@ -1241,7 +1282,7 @@ Apenas o criador ou um administrador pode ativar.`)
           .from('agendamentos')
           .select('id')
           .eq('usuario_id', user.id)
-          .order('created_at', { ascending: false })
+          .order('criado_em', { ascending: false })
 
         if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
           await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
@@ -1335,7 +1376,7 @@ Apenas o criador ou um administrador pode desativar.`)
           .from('agendamentos')
           .select('id')
           .eq('usuario_id', user.id)
-          .order('created_at', { ascending: false })
+          .order('criado_em', { ascending: false })
 
         if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
           await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
@@ -1394,12 +1435,16 @@ Nenhuma alteração registrada.`)
       }
 
       // Montar mensagem de histórico
+      const destinatarioDisplay = agendamento.destinatario_nome || agendamento.destinatario_id
+      const tipoEmoji = agendamento.destinatario_tipo === 'grupo' ? '👥' : '📱'
+
       let historicoMsg = `╔═══════════════════════╗
 ║  📜 *HISTÓRICO*
 ╚═══════════════════════╝
 
 🆔 *ID:* ${agendamentoId}
 📝 *Mensagem:* ${agendamento.mensagem.substring(0, 50)}...
+${tipoEmoji} *Destinatário:* ${destinatarioDisplay}
 
 ━━━━━━━━━━━━━━━━━━━━
 
@@ -1439,6 +1484,67 @@ Nenhuma alteração registrada.`)
 
     let updatedSessionData = { ...(session.dados_temporarios || {}) }
     let nextState = session.estado
+
+    // ========================================
+    // BUSCA DE DESTINATÁRIOS - OTIMIZADA (APENAS BANCO DE DADOS)
+    // ========================================
+    async function buscarDestinatariosPorNome(filtro: string, usuarioId: string): Promise<Array<{id: string, nome: string, tipo: string}>> {
+      try {
+        console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+        console.log(`⚡ [BUSCA_RÁPIDA_DB] Buscando no banco de dados com filtro: "${filtro}"`)
+        console.log(`👤 [BUSCA_RÁPIDA_DB] Usuário ID: ${usuarioId}`)
+
+        // 0️⃣ VERIFICAR SE É UM NÚMERO DE TELEFONE DIRETO
+        const numeroLimpo = filtro.replace(/\D/g, '')
+        const isNumeroTelefone = numeroLimpo.length >= 10 && numeroLimpo.length <= 15
+
+        if (isNumeroTelefone) {
+          console.log(`📱 [BUSCA_RÁPIDA_DB] Detectado número de telefone: ${numeroLimpo}`)
+          const jid = `${numeroLimpo}@s.whatsapp.net`
+          console.log(`✅ [BUSCA_RÁPIDA_DB] Retornando número direto`)
+          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
+
+          return [{
+            id: jid,
+            nome: `📱 ${numeroLimpo}`,
+            tipo: 'contato'
+          }]
+        }
+
+        // 1️⃣ Busca no banco de dados (RÁPIDA - ~100ms)
+        const { data, error } = await supabaseAdmin
+          .from('grupos_usuario')
+          .select('grupo_jid, grupo_nome, tipo')
+          .eq('usuario_id', usuarioId)
+          .eq('ativo', true)
+          .ilike('grupo_nome', `%${filtro}%`)
+          .order('grupo_nome', { ascending: true })
+          .limit(10)
+
+        if (error) {
+          console.error('❌ [BUSCA_RÁPIDA_DB] Erro ao buscar no banco de dados:', error)
+          return []
+        }
+
+        const resultados = data?.map((g: any) => ({
+            id: g.grupo_jid,
+            nome: g.tipo === 'grupo' ? `👥 ${g.grupo_nome}` : `📱 ${g.grupo_nome}`,
+            tipo: g.tipo || 'desconhecido'
+        })) || []
+
+        console.log(`\n📋 [BUSCA_RÁPIDA_DB] RESULTADOS FINAIS:`)
+        console.log(`   Encontrados: ${resultados.length}`)
+        resultados.forEach((r: any, i: number) => {
+          console.log(`   ${i + 1}. ${r.nome} (${r.tipo})`)
+        })
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
+
+        return resultados
+      } catch (error) {
+        console.error('❌ [BUSCA_RÁPIDA_DB] Erro geral:', error)
+        return []
+      }
+    }
 
     switch (session.estado) {
       case 'conversando_ia':
@@ -1565,8 +1671,17 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
         break
 
       case 'perguntando_melhorar':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
         if (messageText === 'melhorar_sim' || messageText === '1' || messageText.toLowerCase().includes('sim')) {
           // Chamar IA para melhorar a mensagem
+          await sendPrivateMessage(senderJid, '🤖 *Processando com IA...*\n\nAguarde alguns segundos...')
+
           const aiPrompt = `Voce e um especialista em comunicacao. Melhore esta mensagem para WhatsApp.
 
 REGRAS:
@@ -1582,47 +1697,28 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
           updatedSessionData.mensagem = mensagemMelhorada
 
           await sendInteractiveButtons(senderJid,
-            `✨ *Mensagem melhorada pela IA:*\n\n${mensagemMelhorada}\n\n━━━━━━━━━━━━━━━━━━━━\nGostou?\n\n⚡ _Ou digite sua correção diretamente_\n⚡ _Digite /voltar para etapa anterior_\n⚡ _Digite /cancelar para sair_`,
+            `✨ *Mensagem melhorada pela IA:*\n\n${mensagemMelhorada}\n\n━━━━━━━━━━━━━━━━━━━━\n\n⚡ _Digite /voltar para mudar a mensagem_\n⚡ _Digite /cancelar para sair_`,
             [
               { id: 'aprovar_ia', text: '✅ Aprovar' },
               { id: 'usar_original', text: '↩️ Usar original' },
-              { id: 'editar_manual', text: '✏️ Editar manualmente' }
+              { id: 'editar_manual', text: '✏️ Editar' }
             ]
           )
           nextState = 'aprovando_mensagem'
         } else if (messageText === 'melhorar_nao' || messageText === '2' || messageText.toLowerCase().includes('não') || messageText.toLowerCase().includes('nao')) {
+          // Usar mensagem original
           updatedSessionData.mensagem = updatedSessionData.mensagem_original
           nextState = 'escolhendo_destinatario'
 
-          // Buscar grupos do usuário
-          await sendPrivateMessage(senderJid, '🔄 Buscando seus grupos...')
-
-          try {
-            const gruposResponse = await fetch(`${EVOLUTION_API_URL}/group/fetchAllGroups/${BOT_INSTANCE_NAME}?getParticipants=false`, {
-              headers: { 'apikey': EVOLUTION_API_KEY || '' }
-            })
-            const grupos = await gruposResponse.json()
-
-            if (grupos && grupos.length > 0) {
-              const gruposLista = grupos.slice(0, 10).map((g: any) => ({
-                id: g.id,
-                title: g.subject || 'Sem nome',
-                description: `${g.participants?.length || 0} membros`
-              }))
-
-              await sendInteractiveList(senderJid,
-                '👥 Escolha o grupo',
-                'Selecione para onde enviar a mensagem',
-                '📋 Ver grupos',
-                [{ title: '👥 Seus Grupos', rows: gruposLista }]
-              )
-            } else {
-              await sendPrivateMessage(senderJid, `📋 *Digite o JID do destinatário:*\n\n💡 _Exemplo: 120363XXXXX@g.us_`)
-            }
-          } catch (error) {
-            console.error('Erro ao buscar grupos:', error)
-            await sendPrivateMessage(senderJid, `📋 *Digite o JID do destinatário:*\n\n💡 _Exemplo: 120363XXXXX@g.us_`)
-          }
+          // Pedir para digitar o nome do grupo/contato
+          await sendPrivateMessage(senderJid,
+            `👥 *Digite o nome do grupo ou contato:*\n\n` +
+            `💡 *Exemplos:*\n` +
+            `• Para grupos: Digite parte do nome (ex: "Petrópolis")\n` +
+            `• Para contatos: Digite o número com DDD (ex: 5531999999999)\n\n` +
+            `⚡ _Digite /voltar para mudar a mensagem_\n` +
+            `⚡ _Digite /cancelar para sair_`
+          )
         } else {
           // Usuário digitou texto livre - interpretar como correção da mensagem
           updatedSessionData.mensagem_original = messageText
@@ -1632,23 +1728,30 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'aprovando_mensagem':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
         if (messageText === 'aprovar_ia' || messageText === '1' || messageText.toLowerCase().includes('aprovar')) {
           // Mensagem já está salva (melhorada)
           nextState = 'escolhendo_destinatario'
-          await sendPrivateMessage(senderJid, `📋 *Digite o ID do destinatário* (grupo ou contato)
+          await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
 
 ━━━━━━━━━━━━━━━━━━━━
-💡 _Exemplo: 120363XXXXX@g.us_
+💡 _Exemplo: Família Silva ou 5511999999999_
 
 ⚡ _Digite /voltar para mudar a mensagem_
 ⚡ _Digite /cancelar para sair_`)
         } else if (messageText === 'usar_original' || messageText === '2') {
           updatedSessionData.mensagem = updatedSessionData.mensagem_original
           nextState = 'escolhendo_destinatario'
-          await sendPrivateMessage(senderJid, `📋 *Digite o ID do destinatário* (grupo ou contato)
+          await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
 
 ━━━━━━━━━━━━━━━━━━━━
-💡 _Exemplo: 120363XXXXX@g.us_
+💡 _Exemplo: Família Silva ou 5511999999999_
 
 ⚡ _Digite /voltar para mudar a mensagem_
 ⚡ _Digite /cancelar para sair_`)
@@ -1659,41 +1762,175 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
 ⚡ _Digite /cancelar para sair_`)
           nextState = 'editando_mensagem_manual'
         } else {
-          // Usuário digitou texto livre - interpretar como nova mensagem
-          updatedSessionData.mensagem_original = messageText
-          updatedSessionData.mensagem = messageText
-          await sendPrivateMessage(senderJid, `✅ *Mensagem atualizada!*\n\n"${messageText}"\n\n━━━━━━━━━━━━━━━━━━━━\n💡 Quer que eu melhore com IA?\n\n1️⃣ ✨ Sim, melhore!\n2️⃣ 👍 Não, está boa\n\n💬 Digite o número da opção desejada\n\n⚡ _Digite /voltar para etapa anterior_\n⚡ _Digite /cancelar para sair_`)
-          nextState = 'perguntando_melhorar'
+          await sendPrivateMessage(senderJid, `❌ *Opção inválida!*\n\nClique em um dos botões acima.\n\n⚡ _Digite /voltar para mudar a mensagem_\n⚡ _Digite /cancelar para sair_`)
+          nextState = 'aprovando_mensagem'
         }
         break
 
       case 'editando_mensagem_manual':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
         updatedSessionData.mensagem_original = messageText
         updatedSessionData.mensagem = messageText
         nextState = 'escolhendo_destinatario'
-        await sendPrivateMessage(senderJid, `✅ *Mensagem salva!*\n\n"${messageText}"\n\n━━━━━━━━━━━━━━━━━━━━\n📋 *Digite o ID do destinatário* (grupo ou contato)
+        await sendPrivateMessage(senderJid, `✅ *Mensagem salva!*\n\n"${messageText}"\n\n━━━━━━━━━━━━━━━━━━━━\n📋 *Digite o nome do grupo ou número do contato*
 
-💡 _Exemplo: 120363XXXXX@g.us_
+💡 _Exemplo: Família Silva ou 5511999999999_
 
 ⚡ _Digite /voltar para mudar a mensagem_
 ⚡ _Digite /cancelar para sair_`)
         break
 
       case 'escolhendo_destinatario':
-        updatedSessionData.destinatario_id = messageText
-        updatedSessionData.destinatario_tipo = messageText.includes('@g.us') ? 'grupo' : 'contato'
-        nextState = 'escolhendo_horario'
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
 
-        // Enviar BOTÕES de horário (super simples!)
-        await sendInteractiveButtons(senderJid,
-          '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado.',
-          [
-            { id: '08:00', text: '🌅 Manhã (8h)' },
-            { id: '14:00', text: '🌞 Tarde (14h)' },
-            { id: '20:00', text: '🌙 Noite (20h)' }
-          ]
-        )
-        await sendPrivateMessage(senderJid, '\n💡 _Ou digite um horário personalizado (ex: 09:30)_')
+        // Buscar destinatários no banco de dados
+        await sendPrivateMessage(senderJid, '🔍 Buscando...')
+
+        const resultados = await buscarDestinatariosPorNome(messageText, user.id)
+
+        if (resultados.length === 0) {
+          await sendPrivateMessage(senderJid,
+            `😕 Nenhum grupo ou contato encontrado para "${messageText}".\n\n` +
+            `💡 *Dicas:*\n` +
+            `• Para contatos: Digite o número com DDD (ex: 5531999999999)\n` +
+            `• Para grupos: Envie uma mensagem no grupo primeiro\n` +
+            `• Tente buscar com menos caracteres\n\n` +
+            `⚡ _Digite /voltar para mudar a mensagem_\n` +
+            `⚡ _Digite /cancelar para sair_`
+          )
+          nextState = 'escolhendo_destinatario'
+        } else if (resultados.length === 1) {
+          // Apenas 1 resultado - selecionar automaticamente
+          updatedSessionData.destinatario_id = resultados[0].id
+          updatedSessionData.destinatario_tipo = resultados[0].tipo
+          nextState = 'escolhendo_horario'
+
+          await sendPrivateMessage(senderJid, `✅ *Destinatário selecionado:*\n${resultados[0].nome}`)
+
+          // Enviar BOTÕES de horário
+          await sendInteractiveButtons(senderJid,
+            '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_',
+            [
+              { id: '08:00', text: '🌅 Manhã (8h)' },
+              { id: '14:00', text: '🌞 Tarde (14h)' },
+              { id: '20:00', text: '🌙 Noite (20h)' }
+            ]
+          )
+        } else {
+          // Múltiplos resultados - mostrar lista
+          let mensagemResultados = `📋 *Encontrei ${resultados.length} resultados:*\n\n`
+          resultados.forEach((r, i) => {
+            mensagemResultados += `${i + 1}. ${r.nome}\n`
+          })
+          mensagemResultados += `\n💡 *Digite o número* da opção desejada (1-${resultados.length})\n\n⚡ _Digite /voltar para mudar a mensagem_\n⚡ _Digite /cancelar para sair_`
+
+          await sendPrivateMessage(senderJid, mensagemResultados)
+
+          // Salvar resultados para próxima etapa
+          updatedSessionData.resultados_busca = resultados
+          nextState = 'selecionando_destinatario'
+        }
+        break
+
+      case 'selecionando_destinatario':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
+        // Usuário escolheu um número da lista
+        const numeroEscolhido = parseInt(messageText.trim())
+        const resultadosSalvos = updatedSessionData.resultados_busca || []
+
+        if (numeroEscolhido >= 1 && numeroEscolhido <= resultadosSalvos.length) {
+          const destinatarioEscolhido = resultadosSalvos[numeroEscolhido - 1]
+
+          // Inicializar array de destinatários se não existir
+          if (!updatedSessionData.destinatarios) {
+            updatedSessionData.destinatarios = []
+          }
+
+          // Adicionar destinatário à lista
+          updatedSessionData.destinatarios.push({
+            id: destinatarioEscolhido.id,
+            nome: destinatarioEscolhido.nome,
+            tipo: destinatarioEscolhido.tipo
+          })
+
+          delete updatedSessionData.resultados_busca
+
+          // Mostrar destinatários selecionados e perguntar se quer adicionar mais
+          let mensagemDestinatarios = `✅ *Destinatário adicionado:*\n${destinatarioEscolhido.nome}\n\n`
+          mensagemDestinatarios += `📋 *Total selecionado(s): ${updatedSessionData.destinatarios.length}*\n\n`
+
+          updatedSessionData.destinatarios.forEach((d: any, i: number) => {
+            mensagemDestinatarios += `${i + 1}. ${d.nome}\n`
+          })
+
+          mensagemDestinatarios += `\n━━━━━━━━━━━━━━━━━━━━\n`
+          mensagemDestinatarios += `💡 *Deseja adicionar mais destinatários?*\n\n`
+          mensagemDestinatarios += `1️⃣ *Sim* - Adicionar mais\n`
+          mensagemDestinatarios += `2️⃣ *Não* - Continuar\n\n`
+          mensagemDestinatarios += `⚡ _Digite /voltar para mudar_\n`
+          mensagemDestinatarios += `⚡ _Digite /cancelar para sair_`
+
+          await sendPrivateMessage(senderJid, mensagemDestinatarios)
+          nextState = 'perguntando_mais_destinatarios'
+        } else {
+          await sendPrivateMessage(senderJid, `❌ Opção inválida. Digite um número entre 1 e ${resultadosSalvos.length}`)
+          nextState = 'selecionando_destinatario'
+        }
+        break
+
+      case 'perguntando_mais_destinatarios':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
+        if (messageText === '1' || messageText.toLowerCase().includes('sim')) {
+          // Adicionar mais destinatários
+          await sendPrivateMessage(senderJid,
+            `👥 *Digite o nome do grupo ou contato:*\n\n` +
+            `💡 *Exemplos:*\n` +
+            `• Para grupos: Digite parte do nome (ex: "Petrópolis")\n` +
+            `• Para contatos: Digite o número com DDD (ex: 5531999999999)\n\n` +
+            `⚡ _Digite /voltar para mudar_\n` +
+            `⚡ _Digite /cancelar para sair_`
+          )
+          nextState = 'escolhendo_destinatario'
+        } else if (messageText === '2' || messageText.toLowerCase().includes('não') || messageText.toLowerCase().includes('nao')) {
+          // Continuar para escolher horário
+          nextState = 'escolhendo_horario'
+
+          // Enviar BOTÕES de horário
+          await sendInteractiveButtons(senderJid,
+            '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_',
+            [
+              { id: '08:00', text: '🌅 Manhã (8h)' },
+              { id: '14:00', text: '🌞 Tarde (14h)' },
+              { id: '20:00', text: '🌙 Noite (20h)' }
+            ]
+          )
+        } else {
+          await sendPrivateMessage(senderJid, `❌ Opção inválida. Digite *1* para adicionar mais ou *2* para continuar.`)
+          nextState = 'perguntando_mais_destinatarios'
+        }
         break
 
       case 'aguardando_destinatario':
@@ -1704,8 +1941,24 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'escolhendo_horario':
-        // Aceitar horário direto (08:00, 14:00, 20:00) ou formato HH:MM
-        let horarioSelecionado = messageText.trim()
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
+        // Mapear opções de botão (aceitar número ou ID)
+        const horariosMap: Record<string, string> = {
+          '08:00': '08:00',
+          '14:00': '14:00',
+          '20:00': '20:00',
+          '1': '08:00',
+          '2': '14:00',
+          '3': '20:00'
+        }
+
+        let horarioSelecionado = horariosMap[messageText.trim()] || messageText.trim()
 
         // Validar formato HH:MM
         if (/^\d{2}:\d{2}$/.test(horarioSelecionado)) {
@@ -1716,7 +1969,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
 
             // Enviar BOTÕES de dias (super simples!)
             await sendInteractiveButtons(senderJid,
-              '📅 *Escolha os dias da semana:*\n\nSelecione quando a mensagem será enviada.',
+              '📅 *Escolha os dias da semana:*\n\nSelecione quando a mensagem será enviada.\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_',
               [
                 { id: 'dias_uteis', text: '🏢 Seg-Sex' },
                 { id: 'todos_dias', text: '📆 Todos os dias' },
@@ -1724,31 +1977,11 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
               ]
             )
           } else {
-            await sendPrivateMessage(senderJid, '❌ Horário inválido! Use formato *HH:MM* (ex: 09:30)')
+            await sendPrivateMessage(senderJid, '❌ Horário inválido! Use formato *HH:MM* (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_')
             nextState = 'escolhendo_horario'
           }
         } else {
-          const erroHorarioMsg = `╔═══════════════════════╗
-║  ❌ *HORÁRIO INVÁLIDO*
-╚═══════════════════════╝
-
-⚠️ O horário "${messageText}" não é válido!
-
-━━━━━━━━━━━━━━━━━━━━
-
-⏰ *Como informar o horário:*
-
-🔘 Clique em um dos botões acima
-   OU
-✏️ Digite no formato *HH:MM*
-   (Ex: *09:30*, *14:00*, *20:15*)
-
-━━━━━━━━━━━━━━━━━━━━
-
-⚡ _Digite /cancelar para sair_
-↩️ _Digite /voltar para etapa anterior_`
-
-          await sendPrivateMessage(senderJid, erroHorarioMsg)
+          await sendPrivateMessage(senderJid, `❌ *Horário inválido!*\n\n⚠️ O horário "${messageText}" não é válido!\n\n⏰ *Como informar:*\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1*, *2* ou *3*\n   OU\n✏️ Digite no formato *HH:MM* (Ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_`)
           nextState = 'escolhendo_horario'
         }
         break
@@ -1795,16 +2028,27 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'escolhendo_dias':
-        let diasSelecionados: number[] = []
-
-        // Mapear seleções pré-definidas (SIMPLIFICADO)
-        const diasMap: Record<string, number[]> = {
-          'dias_uteis': [1, 2, 3, 4, 5],
-          'todos_dias': [1, 2, 3, 4, 5, 6, 7]
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
         }
 
-        if (messageText === 'custom_dias') {
-          await sendPrivateMessage(senderJid, '📅 *Digite os dias separados por vírgula:*\n\n*Exemplo:* 1,3,5 para Seg, Qua e Sex\n\n1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb, 7=Dom')
+        let diasSelecionados: number[] = []
+
+        // Mapear seleções pré-definidas (SIMPLIFICADO) - aceitar número ou ID
+        const diasMap: Record<string, number[]> = {
+          'dias_uteis': [1, 2, 3, 4, 5],
+          'todos_dias': [1, 2, 3, 4, 5, 6, 7],
+          'custom_dias': [],
+          '1': [1, 2, 3, 4, 5],  // Seg-Sex
+          '2': [1, 2, 3, 4, 5, 6, 7],  // Todos os dias
+          '3': []  // Personalizar
+        }
+
+        if (messageText === 'custom_dias' || messageText === '3') {
+          await sendPrivateMessage(senderJid, '📅 *Digite os dias separados por vírgula:*\n\n*Exemplo:* 1,3,5 para Seg, Qua e Sex\n\n1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb, 7=Dom\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
           nextState = 'aguardando_dias'
           break
         } else if (diasMap[messageText]) {
@@ -1815,14 +2059,38 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         }
 
         if (diasSelecionados.length === 0) {
-          await sendPrivateMessage(senderJid, '❌ Seleção inválida!\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite os números separados por vírgula (ex: 1,3,5)')
+          await sendPrivateMessage(senderJid, '❌ Seleção inválida!\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1*, *2* ou *3*\n   OU\n✏️ Digite os números separados por vírgula (ex: 1,3,5)\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
           nextState = 'escolhendo_dias'
         } else {
           updatedSessionData.dias_semana = diasSelecionados
+          nextState = 'escolhendo_termino'
+
+          // Perguntar sobre data de término
+          await sendInteractiveButtons(senderJid,
+            '� *Quando o agendamento deve terminar?*\n\nEscolha uma opção:',
+            [
+              { id: 'termino_nunca', text: '♾️ Nunca (indeterminado)' },
+              { id: 'termino_data', text: '📅 Escolher data' }
+            ]
+          )
+        }
+        break
+
+      case 'escolhendo_termino':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
+        if (messageText === 'termino_nunca' || messageText === '1') {
+          // Sem data de término
+          updatedSessionData.data_termino = null
           nextState = 'aguardando_confirmacao'
 
           const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
-          const diasTexto = diasSelecionados.map(d => diasNomes[d-1]).join(', ')
+          const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
 
           const confirmacaoMsg = `╔═══════════════════════════╗
 ║  ✅ *CONFIRMAR AGENDAMENTO*
@@ -1840,6 +2108,9 @@ ${updatedSessionData.hora_envio}
 📅 *Dias da semana:*
 ${diasTexto}
 
+📆 *Término:*
+Nunca (indeterminado)
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Tudo certo? Confirma o agendamento?`
@@ -1848,42 +2119,177 @@ Tudo certo? Confirma o agendamento?`
             { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
             { id: 'confirmar_nao', text: '❌ Não, cancelar' }
           ])
+        } else if (messageText === 'termino_data' || messageText === '2') {
+          nextState = 'aguardando_data_termino'
+          await sendPrivateMessage(senderJid, '📅 *Digite a data de término:*\n\n*Formato:* DD/MM/AAAA\n*Exemplo:* 31/12/2025\n\n⚡ _Digite /voltar para não definir término_\n⚡ _Digite /cancelar para sair_')
+        } else {
+          await sendPrivateMessage(senderJid, '❌ *Opção inválida!*\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1* (Nunca) ou *2* (Escolher data)\n\n⚡ _Digite /voltar para mudar os dias_\n⚡ _Digite /cancelar para sair_')
+          nextState = 'escolhendo_termino'
+        }
+        break
+
+      case 'aguardando_data_termino':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
+        if (messageText === '/voltar') {
+          updatedSessionData.data_termino = null
+          nextState = 'aguardando_confirmacao'
+
+          const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+          const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
+
+          // Montar lista de destinatários
+          const destinatarios = updatedSessionData.destinatarios || []
+          let destinatariosTexto = ''
+          let totalDestinatarios = 0
+
+          console.log('🔍 DEBUG - Destinatários na confirmação (escolhendo_termino):', JSON.stringify(destinatarios))
+
+          if (destinatarios.length > 0) {
+            destinatariosTexto = destinatarios.map((d: any, i: number) => `${i + 1}. ${d.nome}`).join('\n')
+            totalDestinatarios = destinatarios.length
+          } else if (updatedSessionData.destinatario_nome) {
+            // Fallback para compatibilidade - mostrar nome se disponível
+            destinatariosTexto = updatedSessionData.destinatario_nome
+            totalDestinatarios = 1
+          } else if (updatedSessionData.destinatario_id) {
+            // Último fallback - mostrar JID
+            destinatariosTexto = updatedSessionData.destinatario_id
+            totalDestinatarios = 1
+          }
+
+          const confirmacaoMsg = `╔═══════════════════════════╗
+║  ✅ *CONFIRMAR AGENDAMENTO*
+╚═══════════════════════════╝
+
+📝 *Mensagem:*
+${updatedSessionData.mensagem}
+
+👤 *Destinatário(s):* ${totalDestinatarios > 1 ? `(${totalDestinatarios})` : ''}
+${destinatariosTexto}
+
+⏰ *Horário:*
+${updatedSessionData.hora_envio}
+
+📅 *Dias da semana:*
+${diasTexto}
+
+📆 *Término:*
+Nunca (indeterminado)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tudo certo? Confirma o agendamento?`
+
+          await sendInteractiveButtons(senderJid, confirmacaoMsg, [
+            { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
+            { id: 'confirmar_nao', text: '❌ Não, cancelar' }
+          ])
+        } else {
+          // Validar formato DD/MM/AAAA
+          const dataRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/
+          const match = messageText.match(dataRegex)
+
+          if (!match) {
+            await sendPrivateMessage(senderJid, '❌ *Data inválida!*\n\nUse o formato DD/MM/AAAA\n*Exemplo:* 31/12/2025')
+            nextState = 'aguardando_data_termino'
+          } else {
+            const [_, dia, mes, ano] = match
+            const dataTermino = new Date(parseInt(ano), parseInt(mes) - 1, parseInt(dia))
+            const hoje = new Date()
+            hoje.setHours(0, 0, 0, 0)
+
+            if (dataTermino < hoje) {
+              await sendPrivateMessage(senderJid, '❌ *Data inválida!*\n\nA data de término deve ser futura.\n\nDigite novamente:')
+              nextState = 'aguardando_data_termino'
+            } else {
+              updatedSessionData.data_termino = dataTermino.toISOString().split('T')[0]
+              nextState = 'aguardando_confirmacao'
+
+              const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+              const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
+
+              // Montar lista de destinatários
+              const destinatarios = updatedSessionData.destinatarios || []
+              let destinatariosTexto = ''
+              let totalDestinatarios = 0
+
+              console.log('🔍 DEBUG - Destinatários na confirmação (aguardando_data_termino):', JSON.stringify(destinatarios))
+
+              if (destinatarios.length > 0) {
+                destinatariosTexto = destinatarios.map((d: any, i: number) => `${i + 1}. ${d.nome}`).join('\n')
+                totalDestinatarios = destinatarios.length
+              } else if (updatedSessionData.destinatario_nome) {
+                // Fallback para compatibilidade - mostrar nome se disponível
+                destinatariosTexto = updatedSessionData.destinatario_nome
+                totalDestinatarios = 1
+              } else if (updatedSessionData.destinatario_id) {
+                // Último fallback - mostrar JID
+                destinatariosTexto = updatedSessionData.destinatario_id
+                totalDestinatarios = 1
+              }
+
+              const confirmacaoMsg = `╔═══════════════════════════╗
+║  ✅ *CONFIRMAR AGENDAMENTO*
+╚═══════════════════════════╝
+
+📝 *Mensagem:*
+${updatedSessionData.mensagem}
+
+👤 *Destinatário(s):* ${totalDestinatarios > 1 ? `(${totalDestinatarios})` : ''}
+${destinatariosTexto}
+
+⏰ *Horário:*
+${updatedSessionData.hora_envio}
+
+📅 *Dias da semana:*
+${diasTexto}
+
+📆 *Término:*
+${dia}/${mes}/${ano}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tudo certo? Confirma o agendamento?`
+
+              await sendInteractiveButtons(senderJid, confirmacaoMsg, [
+                { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
+                { id: 'confirmar_nao', text: '❌ Não, cancelar' }
+              ])
+            }
+          }
         }
         break
 
       case 'aguardando_dias':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          nextState = ''
+          break
+        }
+
         const dias = messageText.split(',').map((d: string) => parseInt(d.trim())).filter((d: number) => !isNaN(d) && d >= 1 && d <= 7)
         if (dias.length === 0) {
-            await sendPrivateMessage(senderJid, '❌ Dias inválidos. Por favor, envie números de 1 a 7, separados por vírgula.');
+            await sendPrivateMessage(senderJid, '❌ Dias inválidos. Por favor, envie números de 1 a 7, separados por vírgula.\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_');
             nextState = 'aguardando_dias';
         } else {
             updatedSessionData.dias_semana = dias;
-            const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
-            const diasTexto = dias.map((d: number) => diasNomes[d-1]).join(', ')
+            nextState = 'escolhendo_termino'
 
-            const confirmacaoMsg = `┏━━━━━━━━━━━━━━━━━━━━━┓
-┃  ✅ *Confirmar Agendamento*
-┗━━━━━━━━━━━━━━━━━━━━━┛
-
-📝 *Mensagem:*
-   ${updatedSessionData.mensagem}
-
-👤 *Destinatário:*
-   ${updatedSessionData.destinatario_id}
-
-⏰ *Horário:*
-   ${updatedSessionData.hora_envio}
-
-📅 *Dias:*
-   ${diasTexto}
-
-━━━━━━━━━━━━━━━━━━━━━`
-
-            nextState = 'aguardando_confirmacao'
-            await sendButtons(senderJid, confirmacaoMsg, [
-              { id: 'confirmar_sim', text: '✅ Confirmar' },
-              { id: 'confirmar_nao', text: '❌ Cancelar' }
-            ])
+            // Perguntar sobre data de término
+            await sendInteractiveButtons(senderJid,
+              '📆 *Quando o agendamento deve terminar?*\n\nEscolha uma opção:',
+              [
+                { id: 'termino_nunca', text: '♾️ Nunca (indeterminado)' },
+                { id: 'termino_data', text: '📅 Escolher data' }
+              ]
+            )
         }
         break
 
@@ -1893,42 +2299,78 @@ Tudo certo? Confirma o agendamento?`
 
         if (confirmar) {
             // Validar dados obrigatórios antes de inserir
-            if (!updatedSessionData.usuario_id || !updatedSessionData.mensagem || !updatedSessionData.destinatario_id || !updatedSessionData.hora_envio || !updatedSessionData.dias_semana) {
+            const destinatarios = updatedSessionData.destinatarios || []
+            const temDestinatarios = destinatarios.length > 0
+            const temDestinatarioAntigo = updatedSessionData.destinatario_id
+
+            if (!updatedSessionData.usuario_id || !updatedSessionData.mensagem || (!temDestinatarios && !temDestinatarioAntigo) || !updatedSessionData.hora_envio || !updatedSessionData.dias_semana) {
               await sendPrivateMessage(senderJid, '❌ Erro: Dados incompletos. Digite */novo* para começar novamente.')
               await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
               nextState = ''
               break
             }
 
-            const { data: novoAgendamento, error: insertError } = await supabaseAdmin.from('agendamentos').insert({
+            // Criar agendamentos para cada destinatário
+            const agendamentosParaCriar = []
+
+            if (temDestinatarios) {
+              // Múltiplos destinatários
+              for (const dest of destinatarios) {
+                agendamentosParaCriar.push({
+                  usuario_id: updatedSessionData.usuario_id,
+                  mensagem: updatedSessionData.mensagem,
+                  destinatario_id: dest.id,
+                  destinatario_tipo: dest.tipo,
+                  destinatario_nome: dest.nome.replace(/^(👥|📱)\s*/, ''), // Remover emoji
+                  hora_envio: updatedSessionData.hora_envio,
+                  dias_semana: updatedSessionData.dias_semana,
+                  data_termino: updatedSessionData.data_termino || null,
+                  ativo: true,
+                  modificado_por: user.id
+                })
+              }
+            } else {
+              // Destinatário único (compatibilidade)
+              agendamentosParaCriar.push({
                 usuario_id: updatedSessionData.usuario_id,
                 mensagem: updatedSessionData.mensagem,
                 destinatario_id: updatedSessionData.destinatario_id,
                 destinatario_tipo: updatedSessionData.destinatario_tipo,
                 hora_envio: updatedSessionData.hora_envio,
                 dias_semana: updatedSessionData.dias_semana,
+                data_termino: updatedSessionData.data_termino || null,
                 ativo: true,
                 modificado_por: user.id
-            }).select().single();
-
-            if (!insertError && novoAgendamento) {
-              // Registrar auditoria
-              await supabaseAdmin.from('auditoria_agendamentos').insert({
-                agendamento_id: novoAgendamento.id,
-                usuario_id: user.id,
-                acao: 'criado',
-                dados_anteriores: null,
-                dados_novos: novoAgendamento
               })
+            }
+
+            // Inserir todos os agendamentos
+            const { data: novosAgendamentos, error: insertError } = await supabaseAdmin
+              .from('agendamentos')
+              .insert(agendamentosParaCriar)
+              .select()
+
+            if (!insertError && novosAgendamentos) {
+              // Registrar auditoria para cada agendamento
+              for (const agendamento of novosAgendamentos) {
+                await supabaseAdmin.from('auditoria_agendamentos').insert({
+                  agendamento_id: agendamento.id,
+                  usuario_id: user.id,
+                  acao: 'criado',
+                  dados_anteriores: null,
+                  dados_novos: agendamento
+                })
+              }
             }
 
             await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
 
+            const totalCriados = novosAgendamentos?.length || 1
             const successMsg = `╔═══════════════════╗
 ║  ✅ *SUCESSO!*
 ╚═══════════════════╝
 
-🎉 *Agendamento criado!*
+🎉 *${totalCriados} agendamento(s) criado(s)!*
 
 Sua mensagem será enviada automaticamente nos dias e horários configurados.
 
@@ -2120,10 +2562,17 @@ Digite */novo* para tentar novamente.`
       }
     }
 
+    // Atualizar sessão se o estado mudou OU se os dados temporários mudaram
     if (nextState && nextState !== session.estado) {
       await supabaseAdmin
         .from('sessoes_comando')
         .update({ estado: nextState, dados_temporarios: updatedSessionData })
+        .eq('telefone', sender)
+    } else if (nextState) {
+      // Mesmo estado, mas dados podem ter mudado (ex: adicionar destinatário)
+      await supabaseAdmin
+        .from('sessoes_comando')
+        .update({ dados_temporarios: updatedSessionData })
         .eq('telefone', sender)
     }
 

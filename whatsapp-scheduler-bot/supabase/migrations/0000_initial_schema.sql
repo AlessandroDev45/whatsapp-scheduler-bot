@@ -75,12 +75,12 @@ CREATE INDEX IF NOT EXISTS idx_historico_agendamento ON public.historico_envios(
 
 -- Função para atualizar o campo 'atualizado_em'
 CREATE OR REPLACE FUNCTION public.trigger_set_timestamp()
-RETURNS TRIGGER AS \$\$
+RETURNS TRIGGER AS $$
 BEGIN
   NEW.atualizado_em = NOW();
   RETURN NEW;
 END;
-\$\$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- Triggers para as tabelas
 DROP TRIGGER IF EXISTS set_timestamp ON public.usuarios_autorizados;
@@ -102,10 +102,24 @@ ALTER TABLE public.sessoes_comando ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.historico_envios ENABLE ROW LEVEL SECURITY;
 
 -- Políticas de acesso (Permitir acesso total via service_role key, que será usada pelos scripts)
-CREATE POLICY "Permitir acesso total para service_role" ON public.usuarios_autorizados FOR ALL USING (auth.role() = 'service_role');
-CREATE POLICY "Permitir acesso total para service_role" ON public.agendamentos FOR ALL USING (auth.role() = 'service_role');
-CREATE POLICY "Permitir acesso total para service_role" ON public.sessoes_comando FOR ALL USING (auth.role() = 'service_role');
-CREATE POLICY "Permitir acesso total para service_role" ON public.historico_envios FOR ALL USING (auth.role() = 'service_role');
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'usuarios_autorizados' AND policyname = 'Permitir acesso total para service_role') THEN
+    CREATE POLICY "Permitir acesso total para service_role" ON public.usuarios_autorizados FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'agendamentos' AND policyname = 'Permitir acesso total para service_role') THEN
+    CREATE POLICY "Permitir acesso total para service_role" ON public.agendamentos FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'sessoes_comando' AND policyname = 'Permitir acesso total para service_role') THEN
+    CREATE POLICY "Permitir acesso total para service_role" ON public.sessoes_comando FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'historico_envios' AND policyname = 'Permitir acesso total para service_role') THEN
+    CREATE POLICY "Permitir acesso total para service_role" ON public.historico_envios FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
 
 -- ============================================
 -- TABELA 5: Auditoria de Agendamentos
@@ -134,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON public.auditoria_agendamen
 ALTER TABLE public.auditoria_agendamentos ENABLE ROW LEVEL SECURITY;
 
 -- Política de acesso
+DROP POLICY IF EXISTS "Permitir acesso total para service_role" ON public.auditoria_agendamentos;
 CREATE POLICY "Permitir acesso total para service_role" ON public.auditoria_agendamentos FOR ALL USING (auth.role() = 'service_role');
 
 -- Adicionar coluna modificado_por na tabela agendamentos
