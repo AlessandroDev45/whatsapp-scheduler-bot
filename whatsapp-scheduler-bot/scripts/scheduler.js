@@ -44,7 +44,12 @@ function calcularProximoEnvio(horaEnvio, diasSemana) {
 async function enviarMensagem(destinatario, mensagem) {
     console.log(`Enviando mensagem para ${destinatario}...`);
     const url = `${EVOLUTION_API_URL}/message/sendText/${BOT_INSTANCE_NAME}`;
+
     try {
+        // Criar AbortController para timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
+
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -61,14 +66,27 @@ async function enviarMensagem(destinatario, mensagem) {
                     text: mensagem
                 }
             }),
+            signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
+
         const data = await response.json();
         console.log(`Resposta da API:`, JSON.stringify(data, null, 2));
-        if (!response.ok) throw new Error(`Erro da API: ${JSON.stringify(data)}`);
+
+        if (!response.ok) {
+            throw new Error(`Erro da API: ${JSON.stringify(data)}`);
+        }
+
         console.log(`✅ Mensagem para ${destinatario} enviada com sucesso!`);
         return { status: 'enviado', messageId: data.key?.id };
+
     } catch (error) {
-        console.error(`❌ Falha ao enviar para ${destinatario}:`, error);
+        if (error.name === 'AbortError') {
+            console.error(`❌ Timeout ao enviar para ${destinatario} (10s)`);
+            return { status: 'erro', error: 'Timeout após 10 segundos' };
+        }
+        console.error(`❌ Falha ao enviar para ${destinatario}:`, error.message);
         return { status: 'erro', error: error.message };
     }
 }
