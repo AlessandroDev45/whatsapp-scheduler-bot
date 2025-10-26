@@ -1,0 +1,28 @@
+{
+  "name": "whatsapp-baileys-server",
+  "version": "1.0.0",
+  "description": "Servidor WhatsApp com Baileys para agendamento de mensagens",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": ["whatsapp", "baileys", "scheduler", "bot"],
+  "author": "AleTubeGames",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "@hapi/boom": "^10.0.1",
+    "@supabase/supabase-js": "^2.39.3",
+    "express": "^4.18.2",
+    "pino": "^8.17.2",
+    "qrcode-terminal": "^0.12.0",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+

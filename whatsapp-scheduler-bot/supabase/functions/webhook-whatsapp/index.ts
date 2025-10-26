@@ -7,19 +7,48 @@ import { corsHeaders } from '../_shared/cors.ts'
 // Carregar variáveis de ambiente
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-const EVOLUTION_API_URL = Deno.env.get('EVOLUTION_API_URL')
-const EVOLUTION_API_KEY = Deno.env.get('EVOLUTION_API_KEY')
+const BAILEYS_API_URL = Deno.env.get('BAILEYS_API_URL') || 'https://whatsapp-bot-ale-2025.fly.dev'
 const BOT_INSTANCE_NAME = Deno.env.get('BOT_INSTANCE_NAME') || 'whatsapp_bot'
 const MISTRAL_API_KEY = Deno.env.get('MISTRAL_API_KEY')
 const MISTRAL_MODEL = Deno.env.get('MISTRAL_MODEL') || 'devstral-small-2505'
+// MELHORIA: Mover número do admin para variáveis de ambiente
+const ADMIN_NUMBER = Deno.env.get('ADMIN_NUMBER')
 
 // Validar variáveis de ambiente obrigatórias
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !EVOLUTION_API_URL || !EVOLUTION_API_KEY || !MISTRAL_API_KEY) {
-  throw new Error('Variáveis de ambiente obrigatórias não configuradas')
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !BAILEYS_API_URL || !MISTRAL_API_KEY || !ADMIN_NUMBER) {
+  throw new Error('Variáveis de ambiente obrigatórias não configuradas: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BAILEYS_API_URL, MISTRAL_API_KEY, ADMIN_NUMBER')
 }
 
 // Cliente Supabase com permissões de administrador
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+// ========================================
+// CONSTANTES DE INTERFACE
+// ========================================
+
+const BOTOES_HORARIO = [
+  { id: '08:00', text: '🌅 Manhã (8h)' },
+  { id: '14:00', text: '🌞 Tarde (14h)' },
+  { id: '20:00', text: '🌙 Noite (20h)' }
+]
+
+const BOTOES_DIAS = [
+  { id: 'dias_uteis', text: '🏢 Seg-Sex' },
+  { id: 'todos_dias', text: '📆 Todos os dias' },
+  { id: 'custom_dias', text: '✏️ Personalizar' }
+]
+
+const BOTOES_TERMINO = [
+  { id: 'termino_nunca', text: '♾️ Nunca (indeterminado)' },
+  { id: 'termino_30dias', text: '📅 Daqui a 30 dias' },
+  { id: 'termino_custom', text: '✏️ Escolher data' }
+]
+
+const MENSAGEM_ESCOLHA_TERMINO = '📆 *Quando o agendamento deve terminar?*\n\nEscolha uma opção:'
+
+// ========================================
+// FUNÇÕES HELPER
+// ========================================
 
 // Função para obter saudação baseada no horário
 function getSaudacao(): string {
@@ -27,6 +56,119 @@ function getSaudacao(): string {
   if (hora >= 6 && hora < 12) return 'Bom dia'
   if (hora >= 12 && hora < 18) return 'Boa tarde'
   return 'Boa noite'
+}
+
+// Validar parâmetros de comando
+function validarParametrosComando(messageText: string, minParams: number = 2): string[] | null {
+  const parts = messageText.trim().split(' ')
+  if (parts.length < minParams) {
+    return null
+  }
+  return parts
+}
+
+// Validar horário no formato HH:MM
+function validarHorario(horario: string): boolean {
+  if (!/^\d{2}:\d{2}$/.test(horario)) {
+    return false
+  }
+  const [hora, minuto] = horario.split(':').map(Number)
+  return hora >= 0 && hora <= 23 && minuto >= 0 && minuto <= 59
+}
+
+// Verificar se usuário é admin
+function verificarPermissaoAdmin(telefone: string): boolean {
+  return telefone === ADMIN_NUMBER
+}
+
+// Limpar sessão do usuário
+async function limparSessao(telefone: string) {
+  await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', telefone)
+}
+
+// Calcular próximo envio baseado em hora e dias da semana (horário de Brasília UTC-3)
+function calcularProximoEnvio(horaEnvio: string, diasSemana: number[]): string {
+  // Obter hora atual em UTC
+  const agoraUTC = new Date()
+
+  // Converter UTC para horário de Brasília (UTC-3)
+  // Brasília = UTC - 3 horas
+  const offsetBrasilia = -3 * 60 // -3 horas em minutos
+  const agoraBrasilia = new Date(agoraUTC.getTime() + offsetBrasilia * 60 * 1000)
+
+  const [hora, minuto] = horaEnvio.split(':').map(Number)
+
+  // Se dias_semana está vazio ou null, enviar todos os dias
+  const diasValidos = diasSemana && diasSemana.length > 0 ? diasSemana : [1, 2, 3, 4, 5, 6, 7]
+
+  // Criar data no horário de Brasília
+  const hoje = new Date(agoraBrasilia)
+  hoje.setHours(hora, minuto, 0, 0)
+
+  // Dia da semana atual (1=Seg, 7=Dom)
+  const diaSemanaAtual = agoraBrasilia.getDay() === 0 ? 7 : agoraBrasilia.getDay()
+
+  // Se hoje está nos dias válidos E ainda não passou a hora
+  if (diasValidos.includes(diaSemanaAtual) && agoraBrasilia < hoje) {
+    // Converter de volta para UTC antes de salvar
+    const hojeUTC = new Date(hoje.getTime() - offsetBrasilia * 60 * 1000)
+    return hojeUTC.toISOString()
+  }
+
+  // Procurar próximo dia válido (máximo 7 dias)
+  for (let i = 1; i <= 7; i++) {
+    const proximaData = new Date(agoraBrasilia)
+    proximaData.setDate(proximaData.getDate() + i)
+    proximaData.setHours(hora, minuto, 0, 0)
+
+    const diaSemana = proximaData.getDay() === 0 ? 7 : proximaData.getDay()
+
+    if (diasValidos.includes(diaSemana)) {
+      // Converter de volta para UTC antes de salvar
+      const proximaDataUTC = new Date(proximaData.getTime() - offsetBrasilia * 60 * 1000)
+      return proximaDataUTC.toISOString()
+    }
+  }
+
+  // Fallback: amanhã no mesmo horário
+  const amanha = new Date(agoraBrasilia)
+  amanha.setDate(amanha.getDate() + 1)
+  amanha.setHours(hora, minuto, 0, 0)
+  // Converter de volta para UTC antes de salvar
+  const amanhaUTC = new Date(amanha.getTime() - offsetBrasilia * 60 * 1000)
+  return amanhaUTC.toISOString()
+}
+
+// Verificar se usuário tem permissão para modificar agendamento
+async function verificarPermissaoAgendamento(
+  agendamentoId: string,
+  userId: string,
+  isAdmin: boolean,
+  senderJid: string
+): Promise<boolean> {
+  const { data: agendamento } = await supabaseAdmin
+    .from('agendamentos')
+    .select('usuario_id')
+    .eq('id', agendamentoId)
+    .single()
+
+  if (!agendamento) {
+    await sendPrivateMessage(senderJid, '❌ Agendamento não encontrado.')
+    return false
+  }
+
+  const isDono = agendamento.usuario_id === userId
+
+  if (!isAdmin && !isDono) {
+    await sendPrivateMessage(senderJid, `🔒 *Acesso negado!*
+
+Você não tem permissão para modificar este agendamento.
+
+Apenas o criador ou um administrador pode fazer alterações.`)
+    return false
+  }
+
+  return true
 }
 
 // Função para chamar a Mistral AI
@@ -62,38 +204,114 @@ async function callMistralAI(userMessage: string, systemPrompt: string): Promise
   }
 }
 
-// Função para enviar mensagem de texto
+// Função para enviar mensagem de texto (COM LÓGICA DE "AQUECIMENTO" PARA GRUPOS)
 async function sendText(recipient: string, message: string) {
-  const url = `${EVOLUTION_API_URL}/message/sendText/${BOT_INSTANCE_NAME}`
+  const url = `${BAILEYS_API_URL}/api/send-message`;
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📤 [SEND_TEXT] Enviando mensagem via Baileys`);
+  console.log(`👤 [SEND_TEXT] Destinatário: ${recipient}`);
+  console.log(`📝 [SEND_TEXT] Mensagem (${message.length} chars): ${message.substring(0, 150)}${message.length > 150 ? '...' : ''}`);
+  console.log(`🔗 [SEND_TEXT] URL: ${url}`);
+
   try {
+    const payload = {
+      jid: recipient,
+      text: message,
+    };
+    console.log(`📦 [SEND_TEXT] Payload:`, JSON.stringify(payload, null, 2));
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'apikey': EVOLUTION_API_KEY,
       },
-      body: JSON.stringify({
-        number: recipient,
-        options: {
-          delay: 1200,
-          presence: 'composing',
-        },
-        textMessage: {
-          text: message,
-        },
-      }),
-    })
+      body: JSON.stringify(payload),
+    });
+
+    console.log(`📡 [SEND_TEXT] Status da resposta: ${response.status} ${response.statusText}`);
 
     if (!response.ok) {
-      console.error('Erro ao enviar mensagem:', response.status, response.statusText)
+      const errorText = await response.text();
+      console.error(`❌ [SEND_TEXT] Erro ao enviar mensagem (${response.status}):`, errorText);
+    } else {
+      const responseData = await response.json();
+      console.log(`✅ [SEND_TEXT] Mensagem enviada com sucesso!`);
+      console.log(`📊 [SEND_TEXT] Resposta:`, JSON.stringify(responseData, null, 2));
     }
   } catch (error) {
-    console.error('Erro ao enviar mensagem:', error)
+    console.error(`❌ [SEND_TEXT] Exceção ao enviar mensagem:`, error);
   }
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 }
 
 // Alias para compatibilidade
 const sendPrivateMessage = sendText
+
+// Função helper para buscar agendamento por número ou ID
+async function buscarAgendamentoPorNumeroOuId(inputId: string, userId: string, isAdmin: boolean = false): Promise<string | null> {
+  let agendamentoId = inputId
+
+  // Se for um número (1, 2, 3...), buscar pela posição na lista
+  if (/^\d+$/.test(inputId)) {
+    const posicao = parseInt(inputId) - 1 // Converter para índice (1 -> 0)
+
+    let query = supabaseAdmin
+      .from('agendamentos')
+      .select('id')
+      .order('criado_em', { ascending: false })
+
+    // Se NÃO for admin, filtrar apenas os próprios agendamentos
+    if (!isAdmin) {
+      query = query.eq('usuario_id', userId)
+    }
+
+    const { data: agendamentos } = await query
+
+    if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
+      return null
+    }
+
+    agendamentoId = agendamentos[posicao].id
+  }
+
+  return agendamentoId
+}
+
+// Função para buscar nome de grupo/contato pelo JID
+async function buscarNomeDestinatario(jid: string): Promise<string> {
+  try {
+    // Se for grupo, buscar na tabela grupos_cadastrados
+    if (jid.endsWith('@g.us')) {
+      const { data: grupo } = await supabaseAdmin
+        .from('grupos_cadastrados')
+        .select('nome')
+        .eq('group_id', jid)
+        .single()
+
+      if (grupo?.nome) {
+        return grupo.nome
+      }
+
+      // Se não encontrou no banco, tentar buscar do Baileys
+      try {
+        const response = await fetch(`${BAILEYS_API_URL}/api/group-metadata?jid=${encodeURIComponent(jid)}`)
+        if (response.ok) {
+          const data = await response.json()
+          return data.subject || jid
+        }
+      } catch (e) {
+        console.log('Erro ao buscar metadata do grupo:', e)
+      }
+    }
+
+    // Se for contato individual, retornar apenas o número formatado
+    const numero = jid.split('@')[0]
+    return `📱 ${numero}`
+  } catch (error) {
+    console.error('Erro ao buscar nome do destinatário:', error)
+    return jid
+  }
+}
 
 // Função para enviar opções como texto numerado (compatível com todos os dispositivos)
 async function sendButtons(recipient: string, message: string, buttons: Array<{id: string, text: string}>) {
@@ -129,120 +347,62 @@ async function sendList(recipient: string, title: string, description: string, _
   await sendText(recipient, listText)
 }
 
-// Função para enviar LISTA INTERATIVA REAL (botões clicáveis)
+// Função para enviar LISTA INTERATIVA (sempre usa texto numerado com Baileys)
 async function sendInteractiveList(recipient: string, title: string, description: string, buttonText: string, sections: Array<{title: string, rows: Array<{id: string, title: string, description?: string}>}>) {
-  console.log('🔄 Tentando enviar lista interativa...')
-  const url = `${EVOLUTION_API_URL}/message/sendList/${BOT_INSTANCE_NAME}`
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': EVOLUTION_API_KEY || ''
-      },
-      body: JSON.stringify({
-        number: recipient,
-        options: {
-          delay: 1200,
-          presence: 'composing'
-        },
-        listMessage: {
-          title: title,
-          description: description,
-          buttonText: buttonText,
-          footerText: '💻 Pensado e desenvolvido por AleTubeGames',
-          sections: sections
-        }
-      })
-    })
-
-    if (!response.ok) {
-      console.error('❌ Erro ao enviar lista interativa:', await response.text())
-      console.log('⚠️ Usando fallback (texto numerado)...')
-      // Fallback: usar lista de texto se falhar
-      await sendList(recipient, title, description, buttonText, sections)
-    } else {
-      console.log('✅ Lista interativa enviada com sucesso!')
-    }
-  } catch (error) {
-    console.error('❌ Exceção ao enviar lista interativa:', error)
-    console.log('⚠️ Usando fallback (texto numerado)...')
-    // Fallback: usar lista de texto se falhar
-    await sendList(recipient, title, description, buttonText, sections)
-  }
+  console.log('📋 Enviando lista como texto numerado (Baileys)...')
+  await sendList(recipient, title, description, buttonText, sections)
 }
 
-// Função para enviar BOTÕES INTERATIVOS REAIS (clicáveis)
+// Função para enviar BOTÕES INTERATIVOS (sempre usa texto numerado com Baileys)
 async function sendInteractiveButtons(recipient: string, message: string, buttons: Array<{id: string, text: string}>) {
-  console.log('🔄 Tentando enviar botões interativos...')
-  const url = `${EVOLUTION_API_URL}/message/sendButtons/${BOT_INSTANCE_NAME}`
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': EVOLUTION_API_KEY || ''
-      },
-      body: JSON.stringify({
-        number: recipient,
-        options: {
-          delay: 1200,
-          presence: 'composing'
-        },
-        buttonMessage: {
-          text: message,
-          footerText: '💻 Pensado e desenvolvido por AleTubeGames',
-          buttons: buttons.map(btn => ({
-            buttonId: btn.id,
-            buttonText: {
-              displayText: btn.text
-            },
-            type: 1
-          }))
-        }
-      })
-    })
-
-    if (!response.ok) {
-      console.error('❌ Erro ao enviar botões interativos:', await response.text())
-      console.log('⚠️ Usando fallback (texto numerado)...')
-      // Fallback: usar botões de texto se falhar
-      await sendButtons(recipient, message, buttons)
-    } else {
-      console.log('✅ Botões interativos enviados com sucesso!')
-    }
-  } catch (error) {
-    console.error('❌ Exceção ao enviar botões interativos:', error)
-    console.log('⚠️ Usando fallback (texto numerado)...')
-    // Fallback: usar botões de texto se falhar
-    await sendButtons(recipient, message, buttons)
-  }
+  console.log('🔘 Enviando botões como texto numerado (Baileys)...')
+  await sendButtons(recipient, message, buttons)
 }
 
 // Lógica principal do webhook
 serve(async (req: Request) => {
+  console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  console.log('🌐 [WEBHOOK] Nova requisição recebida')
+  console.log(`🔧 [WEBHOOK] Método: ${req.method}`)
+
   if (req.method === 'OPTIONS') {
+    console.log('✅ [WEBHOOK] Requisição OPTIONS - retornando CORS')
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
     // Log de headers para debug
-    console.log('Headers recebidos:', Object.fromEntries(req.headers.entries()))
+    console.log('📋 [WEBHOOK] Headers recebidos:', Object.fromEntries(req.headers.entries()))
 
     const body = await req.json()
-    console.log('Webhook recebido:', JSON.stringify(body, null, 2))
+    console.log('📦 [WEBHOOK] Body recebido:', JSON.stringify(body, null, 2))
 
     // Validar estrutura básica do webhook
+    console.log('🔍 [WEBHOOK] Validando estrutura do webhook...')
+    console.log(`   - body existe: ${!!body}`)
+    console.log(`   - body.event: ${body?.event}`)
+    console.log(`   - body.data existe: ${!!body?.data}`)
+    console.log(`   - body.data.key existe: ${!!body?.data?.key}`)
+
     if (!body || !body.event || !body.data || !body.data.key) {
+      console.error('❌ [WEBHOOK] Estrutura inválida!')
       return new Response('Webhook inválido', { status: 400 })
     }
 
+    console.log(`🔍 [WEBHOOK] Validando tipo de evento...`)
+    console.log(`   - body.event: ${body.event}`)
+    console.log(`   - body.data.key.remoteJid: ${body.data.key.remoteJid}`)
+
     // Ignorar mensagens que não são de texto ou de grupos
     if (body.event !== 'messages.upsert' || !body.data.key.remoteJid) {
+      console.log('⏭️ [WEBHOOK] Evento ignorado (não é messages.upsert ou sem remoteJid)')
       return new Response('Webhook ignorado: não é uma mensagem de texto.', { status: 200 })
     }
 
+    console.log('✅ [WEBHOOK] Validações iniciais passaram!')
+
     // Extrair informações da mensagem
+    console.log('📝 [WEBHOOK] Extraindo texto da mensagem...')
     const messageText = (
       body.data.message?.conversation ||
       body.data.message?.extendedTextMessage?.text ||
@@ -250,47 +410,58 @@ serve(async (req: Request) => {
       body.data.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
       ''
     ).trim()
+    console.log(`📝 [WEBHOOK] Texto extraído: "${messageText}"`)
+
     const isGroup = body.data.key.remoteJid.endsWith('@g.us')
     const isChannel = body.data.key.remoteJid.endsWith('@lid') // Canais/Listas do WhatsApp
+    console.log(`👥 [WEBHOOK] É grupo: ${isGroup}, É canal: ${isChannel}`)
 
     // Determinar o remetente real
+    console.log('👤 [WEBHOOK] Determinando remetente...')
     let sender: string
     if (isGroup || isChannel) {
       // Em grupos/canais, pegar o participant
       const participant = body.data.key.participant || ''
       const remoteJid = body.data.key.remoteJid || ''
       sender = (participant ? participant.split('@')[0] : remoteJid.split('@')[0] || '').trim()
+      console.log(`   - Participant: ${participant}`)
+      console.log(`   - RemoteJid: ${remoteJid}`)
     } else {
       // Em conversas privadas, pegar o remoteJid
       const remoteJid = body.data.key.remoteJid || ''
       sender = (remoteJid.split('@')[0] || '').trim()
+      console.log(`   - RemoteJid: ${remoteJid}`)
     }
+    console.log(`👤 [WEBHOOK] Sender identificado: ${sender}`)
 
     // Validar sender
     if (!sender || sender.length === 0) {
-      console.error('❌ Remetente inválido ou vazio')
+      console.error('❌ [WEBHOOK] Remetente inválido ou vazio')
       return new Response('Remetente inválido', { status: 400 })
     }
 
     const senderJid = `${sender}@s.whatsapp.net`
+    console.log(`📱 [WEBHOOK] SenderJid: ${senderJid}`)
 
     // Ignorar mensagens enviadas pela própria API (não pelo usuário)
     // Verificar se é uma mensagem de retorno do bot (fromMe: true)
+    console.log(`🔍 [WEBHOOK] Verificando fromMe: ${body.data.key.fromMe}`)
     if (body.data.key.fromMe === true) {
-      console.log('Mensagem do próprio bot ignorada (fromMe: true)')
+      console.log('⏭️ [WEBHOOK] Mensagem do próprio bot ignorada (fromMe: true)')
       return new Response('Mensagem do próprio bot ignorada.', { status: 200 });
     }
 
     // 1. Buscar usuário (ativo ou inativo)
-    console.log('🔍 Buscando usuário:', sender)
+    console.log('🔍 [WEBHOOK] Buscando usuário no banco:', sender)
+    // CORREÇÃO CRÍTICA: Adicionado o campo 'role' na busca para que a verificação de admin funcione.
     let { data: user, error: userError } = await supabaseAdmin
       .from('usuarios_autorizados')
-      .select('id, nome, ativo')
+      .select('id, nome, ativo, role')
       .eq('telefone', sender)
       .single()
 
-    console.log('👤 Usuário encontrado:', user)
-    console.log('❌ Erro ao buscar usuário:', userError)
+    console.log('👤 [WEBHOOK] Usuário encontrado:', user)
+    console.log('❌ [WEBHOOK] Erro ao buscar usuário:', userError)
 
     // Se o usuário existe mas está INATIVO (aguardando aprovação)
     if (user && !user.ativo) {
@@ -307,8 +478,6 @@ _Obrigado pela paciência!_ 🙏`
     // Se o usuário não existe, criar automaticamente (aguardando aprovação)
     if (userError || !user) {
       console.log(`Criando novo usuário: ${sender}`)
-
-      const ADMIN_NUMBER = '553184549893' // Número do admin
 
       const { data: newUser, error: createError } = await supabaseAdmin
         .from('usuarios_autorizados')
@@ -367,15 +536,13 @@ Para rejeitar, digite:
 
     // Comando /aprovar - APENAS PARA ADMIN
     if (messageText.trim().toLowerCase().startsWith('/aprovar')) {
-      const ADMIN_NUMBER = '553184549893'
-
-      if (sender !== ADMIN_NUMBER) {
+      if (!verificarPermissaoAdmin(sender)) {
         await sendPrivateMessage(senderJid, '❌ Apenas o administrador pode aprovar usuários.')
         return new Response('Não autorizado', { status: 403 })
       }
 
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */aprovar 5531XXXXXXXX*')
         return new Response('Formato inválido', { status: 400 })
       }
@@ -435,15 +602,13 @@ Digite */menu* para ver os comandos disponíveis.`
 
     // Comando /rejeitar - APENAS PARA ADMIN
     if (messageText.trim().toLowerCase().startsWith('/rejeitar')) {
-      const ADMIN_NUMBER = '553184549893'
-
-      if (sender !== ADMIN_NUMBER) {
+      if (!verificarPermissaoAdmin(sender)) {
         await sendPrivateMessage(senderJid, '❌ Apenas o administrador pode rejeitar usuários.')
         return new Response('Não autorizado', { status: 403 })
       }
 
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */rejeitar 5531XXXXXXXX*')
         return new Response('Formato inválido', { status: 400 })
       }
@@ -523,7 +688,7 @@ Se você acredita que isso é um erro, entre em contato com o administrador.`
         .then(() => console.log(`✅ Grupo sincronizado: ${grupoNomeSimples}`))
         .catch((err: unknown) => console.error('❌ Erro ao sincronizar grupo:', err))
 
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+      await limparSessao(sender)
 
       const saudacao = getSaudacao()
       const menu = `╔══════════════════╗
@@ -539,6 +704,9 @@ Se você acredita que isso é um erro, entre em contato com o administrador.`
 ┃
 ┣━ 📋 */listar*
 ┃   ↳ _Ver seus agendamentos_
+┃
+┣━ 👥 */cadastrar_grupo*
+┃   ↳ _Cadastrar grupo manualmente_
 ┃
 ┗━ ❓ */ajuda*
     ↳ _Comandos disponíveis_
@@ -623,6 +791,7 @@ ${estadoAtual}
       console.log('🆕 Criando nova sessão para /novo')
       await supabaseAdmin.from('sessoes_comando').upsert({
         telefone: sender,
+        comando: 'novo',
         estado: 'aguardando_mensagem',
         dados_temporarios: {
           usuario_id: user.id
@@ -652,7 +821,7 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
 
     // Comando /cancelar - SEMPRE DISPONÍVEL
     if (messageText.trim().toLowerCase() === '/cancelar') {
-        await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+        await limparSessao(sender);
         const cancelMsg = `╔═══════════════╗
 ║  ❌ *Cancelado*
 ╚═══════════════╝
@@ -721,7 +890,7 @@ Digite */novo* para começar novamente.`
 
     // Comando /menu - mostrar menu principal
     if (messageText.trim().toLowerCase() === '/menu') {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
       const saudacao = getSaudacao()
       const menu = `╔══════════════════╗
@@ -738,6 +907,9 @@ Digite */novo* para começar novamente.`
 ┣━ 📋 */listar*
 ┃   ↳ _Ver seus agendamentos_
 ┃
+┣━ 👥 */cadastrar_grupo*
+┃   ↳ _Cadastrar grupo manualmente_
+┃
 ┗━ ❓ */ajuda*
     ↳ _Comandos disponíveis_
 
@@ -748,9 +920,102 @@ Digite */novo* para começar novamente.`
       return new Response('Menu enviado', { status: 200 })
     }
 
+    // Comando /sincronizar_grupos - buscar grupos do WhatsApp e sincronizar
+    if (messageText.trim().toLowerCase() === '/sincronizar_grupos') {
+      await limparSessao(sender);
+
+      await sendPrivateMessage(senderJid, `🔄 *SINCRONIZANDO GRUPOS...*
+
+⏳ Buscando todos os grupos do WhatsApp...
+
+Aguarde alguns segundos...`)
+
+      try {
+        // Buscar grupos do Baileys
+        const response = await fetch(`${BAILEYS_API_URL}/api/groups`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+
+        if (!response.ok) {
+          throw new Error(`Erro ao buscar grupos: ${response.status}`)
+        }
+
+        const data = await response.json()
+        const groups = data.groups || []
+
+        if (groups.length === 0) {
+          await sendPrivateMessage(senderJid, `📭 *Nenhum grupo encontrado!*
+
+Você não está em nenhum grupo no WhatsApp.
+
+Digite */menu* para voltar.`)
+          return new Response('Nenhum grupo', { status: 200 })
+        }
+
+        // Sincronizar grupos no banco de dados
+        let sincronizados = 0
+        let erros = 0
+
+        for (const group of groups) {
+          try {
+            await supabaseAdmin
+              .from('grupos_usuario')
+              .upsert({
+                usuario_id: user.id,
+                grupo_jid: group.id,
+                grupo_nome: group.subject,
+                tipo: 'grupo',
+                ativo: true,
+                ultima_sincronizacao: new Date().toISOString()
+              }, {
+                onConflict: 'usuario_id,grupo_jid'
+              })
+            sincronizados++
+          } catch (error) {
+            console.error(`❌ Erro ao sincronizar grupo ${group.subject}:`, error)
+            erros++
+          }
+        }
+
+        await sendPrivateMessage(senderJid, `✅ *SINCRONIZAÇÃO CONCLUÍDA!*
+
+📊 *Resultados:*
+• Total de grupos: ${groups.length}
+• Sincronizados: ${sincronizados}
+${erros > 0 ? `• Erros: ${erros}\n` : ''}
+━━━━━━━━━━━━━━━━━━━━
+
+🎯 *Grupos sincronizados:*
+
+${groups.slice(0, 10).map((g: any, i: number) => `${i + 1}. 👥 ${g.subject} (${g.size} membros)`).join('\n')}
+${groups.length > 10 ? `\n... e mais ${groups.length - 10} grupos` : ''}
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 Agora você pode usar estes grupos em seus agendamentos!
+
+Digite */novo* para criar um agendamento
+Digite */menu* para voltar`)
+
+      } catch (error) {
+        console.error('❌ Erro ao sincronizar grupos:', error)
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido'
+        await sendPrivateMessage(senderJid, `❌ *Erro ao sincronizar grupos!*
+
+${errorMessage}
+
+Tente novamente mais tarde ou use */cadastrar_grupo* para cadastrar manually.`)
+      }
+
+      return new Response('Sincronização concluída', { status: 200 })
+    }
+
     // Comando /cadastrar_grupo - cadastrar grupo manualmente
     if (messageText.trim().toLowerCase() === '/cadastrar_grupo') {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
       const avisoMsg = `⚠️ *CADASTRAR GRUPO MANUALMENTE*
 
@@ -788,7 +1053,7 @@ Digite */cancelar* para voltar`
       await supabaseAdmin.from('sessoes_comando').insert({
         telefone: sender,
         comando: 'cadastrar_grupo',
-        estado: 'aguardando_confirmacao',
+        estado: 'aguardando_confirmacao_cadastro_grupo',
         dados: {}
       })
 
@@ -797,7 +1062,7 @@ Digite */cancelar* para voltar`
 
     // Comando /ajuda - mostrar ajuda
     if (messageText.trim().toLowerCase() === '/ajuda') {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
       const isAdmin = user.role === 'admin'
 
@@ -823,9 +1088,13 @@ ${isAdmin ? '👑 *Modo:* Administrador\n\n' : ''}📌 *COMANDOS PRINCIPAIS:*
 
       ajudaMsg += `
 
+🔄 */sincronizar_grupos*
+   Buscar TODOS os grupos do WhatsApp automaticamente
+   (Recomendado - sincroniza grupos reais)
+
 👥 */cadastrar_grupo*
    Cadastrar um grupo manualmente
-   (Use quando a API não conseguir buscar grupos)
+   (Use apenas se a sincronização automática falhar)
 
 ❓ */ajuda*
    Mostrar esta mensagem de ajuda
@@ -893,7 +1162,7 @@ Entre em contato com o administrador.`
 
     // Comando /listar - listar agendamentos
     if (messageText.trim().toLowerCase().startsWith('/listar')) {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
       const isAdmin = user.role === 'admin'
       const args = messageText.trim().split(' ')
@@ -974,22 +1243,37 @@ ${isAdmin ? '👑 *Modo:* Administrador\n' : ''}
 ━━━━━━━━━━━━━━━━━━━━
 `
 
+      // Buscar nomes dos destinatários em paralelo
+      const nomesPromises = agendamentosPagina.map((ag: any) =>
+        ag.destinatario_nome ? Promise.resolve(ag.destinatario_nome) : buscarNomeDestinatario(ag.destinatario_id)
+      )
+      const nomesDestinatarios = await Promise.all(nomesPromises)
+
       agendamentosPagina.forEach((ag: any, index: number) => {
         const numero = inicio + index + 1
         const status = ag.ativo ? '✅' : '❌'
         const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
         const diasTexto = ag.dias_semana?.map((d: number) => diasNomes[d-1]).join(', ') || 'N/A'
-        const mensagemPreview = ag.mensagem.length > 50
-          ? ag.mensagem.substring(0, 50) + '...'
-          : ag.mensagem
+
+        // Mostrar primeiras 2 linhas ou 100 caracteres da mensagem
+        const mensagemLinhas = ag.mensagem.split('\n')
+        let mensagemPreview = ''
+
+        if (mensagemLinhas.length > 2) {
+          mensagemPreview = mensagemLinhas.slice(0, 2).join('\n') + '\n...'
+        } else if (ag.mensagem.length > 100) {
+          mensagemPreview = ag.mensagem.substring(0, 100) + '...'
+        } else {
+          mensagemPreview = ag.mensagem
+        }
 
         // Mostrar criador apenas para admin
         const criadorInfo = isAdmin && ag.criador
           ? `\n   👤 Criador: ${ag.criador.nome} (${ag.criador.telefone})`
           : ''
 
-        // Mostrar nome do destinatário se disponível, senão mostrar JID
-        const destinatarioDisplay = ag.destinatario_nome || ag.destinatario_id
+        // Usar o nome buscado
+        const destinatarioDisplay = nomesDestinatarios[index]
         const tipoEmoji = ag.destinatario_tipo === 'grupo' ? '👥' : '📱'
 
         listaMsg += `
@@ -1027,59 +1311,38 @@ ${numero}. ${status} ${mensagemPreview}
 
     // Comando /deletar - deletar agendamento
     if (messageText.trim().toLowerCase().startsWith('/deletar')) {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */deletar [número]*\n\nExemplo: */deletar 1* (deleta o primeiro da lista)')
         return new Response('Formato inválido', { status: 400 })
       }
 
+      const isAdmin = user.role === 'admin'
       const inputId = parts[1]
-      let agendamentoId = inputId
+      const agendamentoId = await buscarAgendamentoPorNumeroOuId(inputId, user.id, isAdmin)
 
-      // Se for um número (1, 2, 3...), buscar pela posição na lista
-      if (/^\d+$/.test(inputId)) {
-        const posicao = parseInt(inputId) - 1 // Converter para índice (1 -> 0)
+      if (!agendamentoId) {
+        await sendPrivateMessage(senderJid, `❌ *Agendamento #${inputId} não encontrado!*
 
-        const { data: agendamentos } = await supabaseAdmin
-          .from('agendamentos')
-          .select('id')
-          .eq('usuario_id', user.id)
-          .order('criado_em', { ascending: false })
+⚠️ *Atenção:* A numeração muda após deletar um agendamento!
 
-        if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
-          await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado na sua lista.\n\n📋 Digite */listar* para ver seus agendamentos.`)
-          return new Response('Agendamento não encontrado', { status: 404 })
-        }
-
-        agendamentoId = agendamentos[posicao].id
+📋 Digite */listar* para ver a lista atualizada.`)
+        return new Response('Agendamento não encontrado', { status: 404 })
       }
 
-      // Buscar agendamento completo
-      const { data: agendamento, error: agendamentoError } = await supabaseAdmin
+      // Verificar permissão
+      if (!await verificarPermissaoAgendamento(agendamentoId, user.id, isAdmin, senderJid)) {
+        return new Response('Sem permissão', { status: 403 })
+      }
+
+      // Buscar agendamento completo para auditoria
+      const { data: agendamento } = await supabaseAdmin
         .from('agendamentos')
         .select('*')
         .eq('id', agendamentoId)
         .single()
-
-      if (agendamentoError || !agendamento) {
-        await sendPrivateMessage(senderJid, `❌ Agendamento não encontrado.`)
-        return new Response('Agendamento não encontrado', { status: 404 })
-      }
-
-      // Verificar permissão: apenas o dono ou admin pode deletar
-      const isAdmin = user.role === 'admin'
-      const isDono = agendamento.usuario_id === user.id
-
-      if (!isAdmin && !isDono) {
-        await sendPrivateMessage(senderJid, `🔒 *Acesso negado!*
-
-Você não tem permissão para deletar este agendamento.
-
-Apenas o criador ou um administrador pode deletar.`)
-        return new Response('Sem permissão', { status: 403 })
-      }
 
       // Registrar auditoria ANTES de deletar
       await supabaseAdmin.from('auditoria_agendamentos').insert({
@@ -1111,67 +1374,46 @@ Apenas o criador ou um administrador pode deletar.`)
 
 ━━━━━━━━━━━━━━━━━━━━
 
-📋 Digite */listar* para ver seus agendamentos`)
+⚠️ *IMPORTANTE:* A numeração dos agendamentos foi atualizada!
+
+📋 Digite */listar* para ver a lista atualizada antes de deletar outro.`)
 
       return new Response('Agendamento deletado', { status: 200 })
     }
 
     // Comando /editar - editar agendamento
     if (messageText.trim().toLowerCase().startsWith('/editar')) {
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */editar [número]*\n\nExemplo: */editar 1* (edita o primeiro da lista)')
         return new Response('Formato inválido', { status: 400 })
       }
 
+      const isAdmin = user.role === 'admin'
       const inputId = parts[1]
-      let agendamentoId = inputId
+      const agendamentoId = await buscarAgendamentoPorNumeroOuId(inputId, user.id, isAdmin)
 
-      // Se for um número (1, 2, 3...), buscar pela posição na lista
-      if (/^\d+$/.test(inputId)) {
-        const posicao = parseInt(inputId) - 1 // Converter para índice (1 -> 0)
+      if (!agendamentoId) {
+        await sendPrivateMessage(senderJid, `❌ *Agendamento #${inputId} não encontrado!*
 
-        const { data: agendamentos } = await supabaseAdmin
-          .from('agendamentos')
-          .select('id')
-          .eq('usuario_id', user.id)
-          .order('criado_em', { ascending: false })
+📋 Digite */listar* para ver a lista atualizada.`)
+        return new Response('Agendamento não encontrado', { status: 404 })
+      }
 
-        if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
-          await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado na sua lista.\n\n📋 Digite */listar* para ver seus agendamentos.`)
-          return new Response('Agendamento não encontrado', { status: 404 })
-        }
-
-        agendamentoId = agendamentos[posicao].id
+      // Verificar permissão
+      if (!await verificarPermissaoAgendamento(agendamentoId, user.id, isAdmin, senderJid)) {
+        return new Response('Sem permissão', { status: 403 })
       }
 
       // Buscar agendamento completo
-      const { data: agendamento, error: agendamentoError } = await supabaseAdmin
+      const { data: agendamento } = await supabaseAdmin
         .from('agendamentos')
         .select('*')
         .eq('id', agendamentoId)
         .single()
 
-      if (agendamentoError || !agendamento) {
-        await sendPrivateMessage(senderJid, `❌ Agendamento não encontrado.`)
-        return new Response('Agendamento não encontrado', { status: 404 })
-      }
-
-      // Verificar permissão: apenas o dono ou admin pode editar
-      const isAdmin = user.role === 'admin'
-      const isDono = agendamento.usuario_id === user.id
-
-      if (!isAdmin && !isDono) {
-        await sendPrivateMessage(senderJid, `🔒 *Acesso negado!*
-
-Você não tem permissão para editar este agendamento.
-
-Apenas o criador ou um administrador pode editar.`)
-        return new Response('Sem permissão', { status: 403 })
-      }
-
       // Criar sessão de edição
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+      await limparSessao(sender)
       await supabaseAdmin.from('sessoes_comando').insert({
         telefone: sender,
         comando: 'editar',
@@ -1189,6 +1431,14 @@ Apenas o criador ou um administrador pode editar.`)
       const destinatarioDisplay = agendamento.destinatario_nome || agendamento.destinatario_id
       const tipoEmoji = agendamento.destinatario_tipo === 'grupo' ? '👥' : '📱'
 
+      // Formatar data de término
+      const dataTerminoTexto = agendamento.data_termino
+        ? new Date(agendamento.data_termino).toLocaleDateString('pt-BR')
+        : '♾️ Indeterminado'
+
+      // Status ativo/inativo
+      const statusTexto = agendamento.ativo ? '✅ Ativo' : '❌ Inativo'
+
       const editarMsg = `✏️ *EDITAR AGENDAMENTO #${agendamentoId}*
 
 📋 *Dados atuais:*
@@ -1205,6 +1455,12 @@ ${agendamento.hora_envio}
 📅 *Dias:*
 ${diasTexto}
 
+📆 *Término:*
+${dataTerminoTexto}
+
+🔔 *Status:*
+${statusTexto}
+
 ━━━━━━━━━━━━━━━━━━━━
 
 *O que deseja editar?*`
@@ -1212,7 +1468,9 @@ ${diasTexto}
       await sendInteractiveButtons(senderJid, editarMsg, [
         { id: 'editar_mensagem', text: '📝 Mensagem' },
         { id: 'editar_horario', text: '⏰ Horário' },
-        { id: 'editar_dias', text: '📅 Dias' }
+        { id: 'editar_dias', text: '📅 Dias' },
+        { id: 'editar_termino', text: '📆 Data término' },
+        { id: 'editar_status', text: agendamento.ativo ? '❌ Desativar' : '✅ Ativar' }
       ])
 
       return new Response('Modo edição iniciado', { status: 200 })
@@ -1220,59 +1478,36 @@ ${diasTexto}
 
     // Comando /ativar - ativar agendamento
     if (messageText.trim().toLowerCase().startsWith('/ativar')) {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */ativar [número]*\n\nExemplo: */ativar 1*')
         return new Response('Formato inválido', { status: 400 })
       }
 
+      const isAdmin = user.role === 'admin'
       const inputId = parts[1]
-      let agendamentoId = inputId
+      const agendamentoId = await buscarAgendamentoPorNumeroOuId(inputId, user.id, isAdmin)
 
-      // Se for um número (1, 2, 3...), buscar pela posição na lista
-      if (/^\d+$/.test(inputId)) {
-        const posicao = parseInt(inputId) - 1
+      if (!agendamentoId) {
+        await sendPrivateMessage(senderJid, `❌ *Agendamento #${inputId} não encontrado!*
 
-        const { data: agendamentos } = await supabaseAdmin
-          .from('agendamentos')
-          .select('id')
-          .eq('usuario_id', user.id)
-          .order('criado_em', { ascending: false })
-
-        if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
-          await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
-          return new Response('Agendamento não encontrado', { status: 404 })
-        }
-
-        agendamentoId = agendamentos[posicao].id
+📋 Digite */listar* para ver a lista atualizada.`)
+        return new Response('Agendamento não encontrado', { status: 404 })
       }
 
-      // Buscar agendamento completo
-      const { data: agendamento, error: agendamentoError } = await supabaseAdmin
+      // Verificar permissão
+      if (!await verificarPermissaoAgendamento(agendamentoId, user.id, isAdmin, senderJid)) {
+        return new Response('Sem permissão', { status: 403 })
+      }
+
+      // Buscar agendamento completo para auditoria
+      const { data: agendamento } = await supabaseAdmin
         .from('agendamentos')
         .select('*')
         .eq('id', agendamentoId)
         .single()
-
-      if (agendamentoError || !agendamento) {
-        await sendPrivateMessage(senderJid, `❌ Agendamento não encontrado.`)
-        return new Response('Agendamento não encontrado', { status: 404 })
-      }
-
-      // Verificar permissão: apenas o dono ou admin pode ativar
-      const isAdmin = user.role === 'admin'
-      const isDono = agendamento.usuario_id === user.id
-
-      if (!isAdmin && !isDono) {
-        await sendPrivateMessage(senderJid, `🔒 *Acesso negado!*
-
-Você não tem permissão para ativar este agendamento.
-
-Apenas o criador ou um administrador pode ativar.`)
-        return new Response('Sem permissão', { status: 403 })
-      }
 
       // Registrar auditoria
       await supabaseAdmin.from('auditoria_agendamentos').insert({
@@ -1314,59 +1549,36 @@ Apenas o criador ou um administrador pode ativar.`)
 
     // Comando /desativar - desativar agendamento
     if (messageText.trim().toLowerCase().startsWith('/desativar')) {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */desativar [número]*\n\nExemplo: */desativar 1*')
         return new Response('Formato inválido', { status: 400 })
       }
 
+      const isAdmin = user.role === 'admin'
       const inputId = parts[1]
-      let agendamentoId = inputId
+      const agendamentoId = await buscarAgendamentoPorNumeroOuId(inputId, user.id, isAdmin)
 
-      // Se for um número (1, 2, 3...), buscar pela posição na lista
-      if (/^\d+$/.test(inputId)) {
-        const posicao = parseInt(inputId) - 1
+      if (!agendamentoId) {
+        await sendPrivateMessage(senderJid, `❌ *Agendamento #${inputId} não encontrado!*
 
-        const { data: agendamentos } = await supabaseAdmin
-          .from('agendamentos')
-          .select('id')
-          .eq('usuario_id', user.id)
-          .order('criado_em', { ascending: false })
-
-        if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
-          await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
-          return new Response('Agendamento não encontrado', { status: 404 })
-        }
-
-        agendamentoId = agendamentos[posicao].id
+📋 Digite */listar* para ver a lista atualizada.`)
+        return new Response('Agendamento não encontrado', { status: 404 })
       }
 
-      // Buscar agendamento completo
-      const { data: agendamento, error: agendamentoError } = await supabaseAdmin
+      // Verificar permissão
+      if (!await verificarPermissaoAgendamento(agendamentoId, user.id, isAdmin, senderJid)) {
+        return new Response('Sem permissão', { status: 403 })
+      }
+
+      // Buscar agendamento completo para auditoria
+      const { data: agendamento } = await supabaseAdmin
         .from('agendamentos')
         .select('*')
         .eq('id', agendamentoId)
         .single()
-
-      if (agendamentoError || !agendamento) {
-        await sendPrivateMessage(senderJid, `❌ Agendamento não encontrado.`)
-        return new Response('Agendamento não encontrado', { status: 404 })
-      }
-
-      // Verificar permissão: apenas o dono ou admin pode desativar
-      const isAdmin = user.role === 'admin'
-      const isDono = agendamento.usuario_id === user.id
-
-      if (!isAdmin && !isDono) {
-        await sendPrivateMessage(senderJid, `🔒 *Acesso negado!*
-
-Você não tem permissão para desativar este agendamento.
-
-Apenas o criador ou um administrador pode desativar.`)
-        return new Response('Sem permissão', { status: 403 })
-      }
 
       // Registrar auditoria
       await supabaseAdmin.from('auditoria_agendamentos').insert({
@@ -1408,57 +1620,34 @@ Apenas o criador ou um administrador pode desativar.`)
 
     // Comando /historico - ver histórico de alterações de um agendamento
     if (messageText.trim().toLowerCase().startsWith('/historico')) {
-      await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+      await limparSessao(sender);
 
-      const parts = messageText.trim().split(' ')
-      if (parts.length < 2) {
+      const parts = validarParametrosComando(messageText, 2)
+      if (!parts) {
         await sendPrivateMessage(senderJid, '❌ Uso correto: */historico [número]*\n\nExemplo: */historico 1*')
         return new Response('Formato inválido', { status: 400 })
       }
 
+      const isAdmin = user.role === 'admin'
       const inputId = parts[1]
-      let agendamentoId = inputId
+      const agendamentoId = await buscarAgendamentoPorNumeroOuId(inputId, user.id, isAdmin)
 
-      // Se for um número (1, 2, 3...), buscar pela posição na lista
-      if (/^\d+$/.test(inputId)) {
-        const posicao = parseInt(inputId) - 1
-
-        const { data: agendamentos } = await supabaseAdmin
-          .from('agendamentos')
-          .select('id')
-          .eq('usuario_id', user.id)
-          .order('criado_em', { ascending: false })
-
-        if (!agendamentos || posicao < 0 || posicao >= agendamentos.length) {
-          await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
-          return new Response('Agendamento não encontrado', { status: 404 })
-        }
-
-        agendamentoId = agendamentos[posicao].id
+      if (!agendamentoId) {
+        await sendPrivateMessage(senderJid, `❌ Agendamento *${inputId}* não encontrado.\n\n📋 Digite */listar* para ver seus agendamentos.`)
+        return new Response('Agendamento não encontrado', { status: 404 })
       }
 
-      // Buscar agendamento completo
-      const { data: agendamento, error: agendamentoError } = await supabaseAdmin
+      // Verificar permissão
+      if (!await verificarPermissaoAgendamento(agendamentoId, user.id, isAdmin, senderJid)) {
+        return new Response('Sem permissão', { status: 403 })
+      }
+
+      // Buscar agendamento para exibir informações
+      const { data: agendamento } = await supabaseAdmin
         .from('agendamentos')
         .select('*')
         .eq('id', agendamentoId)
         .single()
-
-      if (agendamentoError || !agendamento) {
-        await sendPrivateMessage(senderJid, `❌ Agendamento não encontrado.`)
-        return new Response('Agendamento não encontrado', { status: 404 })
-      }
-
-      // Verificar permissão: apenas o dono ou admin pode ver histórico
-      const isAdmin = user.role === 'admin'
-      const isDono = agendamento.usuario_id === user.id
-
-      if (!isAdmin && !isDono) {
-        await sendPrivateMessage(senderJid, `🔒 *Acesso negado!*
-
-Você não tem permissão para ver o histórico deste agendamento.`)
-        return new Response('Sem permissão', { status: 403 })
-      }
 
       // Buscar histórico de auditoria
       const { data: historico, error: historicoError } = await supabaseAdmin
@@ -1537,24 +1726,21 @@ ${tipoEmoji} *Destinatário:* ${destinatarioDisplay}
     let nextState = session.estado
 
     // ========================================
-    // BUSCA DE DESTINATÁRIOS - OTIMIZADA (APENAS BANCO DE DADOS)
+    // BUSCA DE DESTINATÁRIOS - ESTRATÉGIA HÍBRIDA (DB + API FALLBACK)
     // ========================================
-    async function buscarDestinatariosPorNome(filtro: string, usuarioId: string): Promise<Array<{id: string, nome: string, tipo: string}>> {
+
+    // FUNÇÃO 1: Busca rápida apenas no banco de dados local.
+    async function buscarDestinatariosNoBanco(filtro: string, usuarioId: string): Promise<Array<{id: string, nome: string, tipo: string}>> {
       try {
-        console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-        console.log(`⚡ [BUSCA_RÁPIDA_DB] Buscando no banco de dados com filtro: "${filtro}"`)
-        console.log(`👤 [BUSCA_RÁPIDA_DB] Usuário ID: ${usuarioId}`)
+        console.log(`⚡ [BUSCA_DB] Buscando no banco de dados com filtro: "${filtro}"`);
 
         // 0️⃣ VERIFICAR SE É UM NÚMERO DE TELEFONE DIRETO
         const numeroLimpo = filtro.replace(/\D/g, '')
         const isNumeroTelefone = numeroLimpo.length >= 10 && numeroLimpo.length <= 15
 
         if (isNumeroTelefone) {
-          console.log(`📱 [BUSCA_RÁPIDA_DB] Detectado número de telefone: ${numeroLimpo}`)
+          console.log(`📱 [BUSCA_DB] Detectado número de telefone: ${numeroLimpo}`)
           const jid = `${numeroLimpo}@s.whatsapp.net`
-          console.log(`✅ [BUSCA_RÁPIDA_DB] Retornando número direto`)
-          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
-
           return [{
             id: jid,
             nome: `📱 ${numeroLimpo}`,
@@ -1562,7 +1748,6 @@ ${tipoEmoji} *Destinatário:* ${destinatarioDisplay}
           }]
         }
 
-        // 1️⃣ Busca no banco de dados (RÁPIDA - ~100ms)
         const { data, error } = await supabaseAdmin
           .from('grupos_usuario')
           .select('grupo_jid, grupo_nome, tipo')
@@ -1570,31 +1755,40 @@ ${tipoEmoji} *Destinatário:* ${destinatarioDisplay}
           .eq('ativo', true)
           .ilike('grupo_nome', `%${filtro}%`)
           .order('grupo_nome', { ascending: true })
-          .limit(10)
+          .limit(10);
 
         if (error) {
-          console.error('❌ [BUSCA_RÁPIDA_DB] Erro ao buscar no banco de dados:', error)
-          return []
+          console.error('❌ [BUSCA_DB] Erro:', error);
+          return [];
         }
 
         const resultados = data?.map((g: any) => ({
             id: g.grupo_jid,
             nome: g.tipo === 'grupo' ? `👥 ${g.grupo_nome}` : `📱 ${g.grupo_nome}`,
             tipo: g.tipo || 'desconhecido'
-        })) || []
+        })) || [];
 
-        console.log(`\n📋 [BUSCA_RÁPIDA_DB] RESULTADOS FINAIS:`)
-        console.log(`   Encontrados: ${resultados.length}`)
-        resultados.forEach((r: any, i: number) => {
-          console.log(`   ${i + 1}. ${r.nome} (${r.tipo})`)
-        })
-        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
-
-        return resultados
+        console.log(`✅ [BUSCA_DB] Encontrados ${resultados.length} resultados.`);
+        return resultados;
       } catch (error) {
-        console.error('❌ [BUSCA_RÁPIDA_DB] Erro geral:', error)
-        return []
+        console.error('❌ [BUSCA_DB] Erro geral:', error);
+        return [];
       }
+    }
+
+    // FUNÇÃO 2: Busca principal (apenas no banco de dados - Baileys não tem API de busca)
+    async function buscarDestinatariosPorNome(filtro: string, usuarioId: string): Promise<Array<{id: string, nome: string, tipo: string}>> {
+      console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      console.log(`🔍 [BUSCA] Buscando por "${filtro}" no banco de dados`);
+
+      const resultados = await buscarDestinatariosNoBanco(filtro, usuarioId);
+
+      console.log(`\n📋 [BUSCA] RESULTADOS FINAIS PARA "${filtro}":`);
+      console.log(`   Total retornado: ${resultados.length}`);
+      resultados.forEach((r, i) => console.log(`   ${i + 1}. ${r.nome}`));
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+      return resultados;
     }
 
     switch (session.estado) {
@@ -1673,7 +1867,7 @@ Analise a mensagem do usuário:
           // (o switch case abaixo vai processar o estado)
         } else if (messageText === '2' || messageText.toLowerCase().includes('recomeçar') || messageText.toLowerCase().includes('recomecar')) {
           // Cancelar sessão antiga e criar nova
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
 
           await supabaseAdmin.from('sessoes_comando').upsert({
             telefone: sender,
@@ -1708,11 +1902,10 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
         break
 
       // ========== CADASTRAR GRUPO ==========
-      case 'aguardando_confirmacao':
-        if (session.comando === 'cadastrar_grupo') {
-          if (messageText === '1') {
-            nextState = 'aguardando_jid_grupo'
-            await sendPrivateMessage(senderJid, `📝 *Digite o JID do grupo*
+      case 'aguardando_confirmacao_cadastro_grupo':
+        if (messageText === '1') {
+          nextState = 'aguardando_jid_grupo'
+          await sendPrivateMessage(senderJid, `📝 *Digite o JID do grupo*
 
 ⚠️ *ATENÇÃO:* Cole o JID completo!
 
@@ -1730,17 +1923,16 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
 3. Cole aqui
 
 ⚡ _Digite /cancelar para sair_`)
-          } else {
-            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
-            await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
-            nextState = ''
-          }
+        } else {
+          await limparSessao(sender)
+          await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
+          nextState = ''
         }
         break
 
       case 'aguardando_jid_grupo':
         if (messageText === '/cancelar') {
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
           nextState = ''
           break
@@ -1788,7 +1980,7 @@ ${messageText}
 
       case 'aguardando_nome_grupo':
         if (messageText === '/cancelar') {
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
           nextState = ''
           break
@@ -1820,7 +2012,7 @@ ${messageText}
 
       case 'confirmando_cadastro_grupo':
         if (messageText === '/cancelar' || messageText === '2') {
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           await sendPrivateMessage(senderJid, '❌ Operação cancelada.')
           nextState = ''
           break
@@ -1866,7 +2058,7 @@ Agora você pode usar este grupo em seus agendamentos!
 📱 Digite */menu* para voltar ao menu`)
           }
 
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
         } else {
           await sendPrivateMessage(senderJid, `❌ Opção inválida!
@@ -1893,7 +2085,7 @@ Digite *1* para confirmar ou *2* para cancelar`)
       case 'perguntando_melhorar':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -1950,7 +2142,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'aprovando_mensagem':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -1990,7 +2182,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'editando_mensagem_manual':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2009,7 +2201,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'escolhendo_destinatario':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2026,34 +2218,52 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
             `• Para contatos: Digite o número com DDD (ex: 5531999999999)\n` +
             `• Para grupos: Envie uma mensagem no grupo primeiro\n` +
             `• Tente buscar com menos caracteres\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👥 *Quer cadastrar um novo grupo?*\n\n` +
+            `Digite *1* para cadastrar um grupo manualmente\n` +
+            `Digite *2* para buscar novamente\n\n` +
             `⚡ _Digite /voltar para mudar a mensagem_\n` +
             `⚡ _Digite /cancelar para sair_`
           )
-          nextState = 'escolhendo_destinatario'
+          updatedSessionData.busca_anterior = messageText
+          nextState = 'perguntando_cadastrar_grupo'
         } else if (resultados.length === 1) {
-          // Apenas 1 resultado - selecionar automaticamente
-          updatedSessionData.destinatario_id = resultados[0].id
-          updatedSessionData.destinatario_tipo = resultados[0].tipo
-          nextState = 'escolhendo_horario'
+          // Apenas 1 resultado - adicionar à lista e perguntar se quer mais
+          if (!updatedSessionData.destinatarios) updatedSessionData.destinatarios = []
 
-          await sendPrivateMessage(senderJid, `✅ *Destinatário selecionado:*\n${resultados[0].nome}`)
+          const destinatario = resultados[0]
 
-          // Enviar BOTÕES de horário
+          // Verificar se já não está na lista
+          if (!updatedSessionData.destinatarios.some((d: any) => d.id === destinatario.id)) {
+            updatedSessionData.destinatarios.push({ ...destinatario })
+
+            await sendPrivateMessage(senderJid, `✅ *Destinatário adicionado:*\n👥 ${destinatario.nome}\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*`)
+          } else {
+            await sendPrivateMessage(senderJid, `⚠️ *Destinatário já está na lista!*\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*`)
+          }
+
+          // Perguntar se quer adicionar mais
+          nextState = 'perguntando_mais_destinatarios'
           await sendInteractiveButtons(senderJid,
-            '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_',
+            '👥 *Deseja adicionar mais destinatários?*\n\nVocê pode enviar a mesma mensagem para vários grupos/contatos!\n\n⚡ _Digite /voltar para mudar a mensagem_\n⚡ _Digite /cancelar para sair_',
             [
-              { id: '08:00', text: '🌅 Manhã (8h)' },
-              { id: '14:00', text: '🌞 Tarde (14h)' },
-              { id: '20:00', text: '🌙 Noite (20h)' }
+              { id: '1', text: '✅ Sim, adicionar mais' },
+              { id: '2', text: '➡️ Não, continuar' }
             ]
           )
         } else {
-          // Múltiplos resultados - mostrar lista
+          // Múltiplos resultados - mostrar lista com opção de múltipla seleção
           let mensagemResultados = `📋 *Encontrei ${resultados.length} resultados:*\n\n`
           resultados.forEach((r, i) => {
             mensagemResultados += `${i + 1}. ${r.nome}\n`
           })
-          mensagemResultados += `\n💡 *Digite o número* da opção desejada (1-${resultados.length})\n\n⚡ _Digite /voltar para mudar a mensagem_\n⚡ _Digite /cancelar para sair_`
+          mensagemResultados += `\n💡 *Selecione os destinatários:*\n\n`
+          mensagemResultados += `🔢 *Digite o número* para adicionar um destinatário\n`
+          mensagemResultados += `📝 *Digite vários números separados por vírgula* para adicionar vários\n`
+          mensagemResultados += `   *Exemplo: 1,3,5* (adiciona destinatários 1, 3 e 5)\n\n`
+          mensagemResultados += `⚡ _Digite /voltar para mudar a mensagem_\n`
+          mensagemResultados += `⚡ _Digite /cancelar para sair_\n\n`
+          mensagemResultados += `💬 *Quando terminar, digite "pronto" para continuar*`
 
           await sendPrivateMessage(senderJid, mensagemResultados)
 
@@ -2063,54 +2273,244 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         }
         break
 
-      case 'selecionando_destinatario':
+      case 'perguntando_cadastrar_grupo':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
 
-        // Usuário escolheu um número da lista
-        const numeroEscolhido = parseInt(messageText.trim())
+        if (messageText === '1') {
+          // Cadastrar novo grupo
+          nextState = 'cadastrando_jid_grupo_inline'
+          await sendPrivateMessage(senderJid, `👥 *CADASTRAR NOVO GRUPO*
+
+⚠️ *ATENÇÃO - LEIA COM CUIDADO!*
+
+Você precisará fornecer:
+1️⃣ JID do grupo (ex: 120363318862188145@g.us)
+2️⃣ Nome do grupo (ex: Grupo da família)
+
+━━━━━━━━━━━━━━━━━━━━
+
+⚠️ *CUIDADOS:*
+❌ NÃO digite o JID errado!
+❌ NÃO invente JIDs!
+✅ Copie e cole o JID real
+
+━━━━━━━━━━━━━━━━━━━━
+
+📝 *Digite o JID do grupo agora:*
+
+💡 Formato: 120363XXXXXXXXXX@g.us
+
+⚡ _Digite /voltar para buscar novamente_
+⚡ _Digite /cancelar para sair_`)
+        } else if (messageText === '2') {
+          // Buscar novamente
+          nextState = 'escolhendo_destinatario'
+          await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
+
+💡 _Exemplo: Família Silva ou 5511999999999_
+
+⚡ _Digite /voltar para mudar a mensagem_
+⚡ _Digite /cancelar para sair_`)
+        } else {
+          await sendPrivateMessage(senderJid, `❌ Opção inválida!
+
+Digite *1* para cadastrar grupo
+Digite *2* para buscar novamente`)
+          nextState = 'perguntando_cadastrar_grupo'
+        }
+        break
+
+      case 'cadastrando_jid_grupo_inline':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await limparSessao(sender)
+          nextState = ''
+          break
+        }
+
+        if (messageText === '/voltar') {
+          nextState = 'escolhendo_destinatario'
+          await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
+
+⚡ _Digite /cancelar para sair_`)
+          break
+        }
+
+        // Validar JID
+        const jidRegexInline = /^\d+@g\.us$/
+        if (!jidRegexInline.test(messageText.trim())) {
+          await sendPrivateMessage(senderJid, `❌ *JID inválido!*
+
+Formato correto: *120363318862188145@g.us*
+
+Você digitou: ${messageText}
+
+⚠️ Verifique:
+• Tem números antes do @?
+• Termina com @g.us?
+• Não tem espaços?
+
+💡 Tente novamente ou digite */voltar*`)
+          nextState = 'cadastrando_jid_grupo_inline'
+          break
+        }
+
+        updatedSessionData.novo_grupo_jid = messageText.trim()
+        nextState = 'cadastrando_nome_grupo_inline'
+        await sendPrivateMessage(senderJid, `✅ *JID salvo!*
+
+${messageText}
+
+━━━━━━━━━━━━━━━━━━━━
+
+📝 *Agora digite o NOME do grupo:*
+
+💡 Exemplos:
+• Grupo da família
+• Trabalho - Equipe
+• Amigos da escola
+
+⚡ _Digite /voltar para mudar o JID_
+⚡ _Digite /cancelar para sair_`)
+        break
+
+      case 'cadastrando_nome_grupo_inline':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await limparSessao(sender)
+          nextState = ''
+          break
+        }
+
+        if (messageText === '/voltar') {
+          nextState = 'cadastrando_jid_grupo_inline'
+          await sendPrivateMessage(senderJid, `📝 *Digite o JID do grupo novamente:*
+
+⚡ _Digite /cancelar para sair_`)
+          break
+        }
+
+        updatedSessionData.novo_grupo_nome = messageText.trim()
+
+        // Salvar grupo no banco
+        const { error: insertGrupoError } = await supabaseAdmin
+          .from('grupos_usuario')
+          .insert({
+            usuario_id: user.id,
+            grupo_jid: updatedSessionData.novo_grupo_jid,
+            grupo_nome: updatedSessionData.novo_grupo_nome,
+            tipo: 'grupo',
+            ativo: true
+          })
+
+        if (insertGrupoError) {
+          await sendPrivateMessage(senderJid, `❌ *Erro ao cadastrar grupo!*
+
+${insertGrupoError.message}
+
+Digite */novo* para tentar novamente.`)
+          await limparSessao(sender)
+          nextState = ''
+        } else {
+          // Grupo cadastrado com sucesso! Agora usar como destinatário
+          updatedSessionData.destinatario_id = updatedSessionData.novo_grupo_jid
+          updatedSessionData.destinatario_tipo = 'grupo'
+          nextState = 'escolhendo_horario'
+
+          await sendPrivateMessage(senderJid, `✅ *GRUPO CADASTRADO E SELECIONADO!*
+
+👥 *${updatedSessionData.novo_grupo_nome}*
+🆔 ${updatedSessionData.novo_grupo_jid}
+
+━━━━━━━━━━━━━━━━━━━━`)
+
+          // Enviar opções de horário
+          await sendInteractiveButtons(senderJid,
+            '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_',
+            BOTOES_HORARIO
+          )
+        }
+        break
+
+      case 'selecionando_destinatario':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await limparSessao(sender)
+          nextState = ''
+          break
+        }
+
+        // CORREÇÃO LÓGICA: Reestruturado para if/else if/else para tratar todas as entradas.
+        const textoLimpo = messageText.toLowerCase().trim()
         const resultadosSalvos = updatedSessionData.resultados_busca || []
 
-        if (numeroEscolhido >= 1 && numeroEscolhido <= resultadosSalvos.length) {
-          const destinatarioEscolhido = resultadosSalvos[numeroEscolhido - 1]
-
-          // Inicializar array de destinatários se não existir
-          if (!updatedSessionData.destinatarios) {
-            updatedSessionData.destinatarios = []
+        if (textoLimpo === 'pronto') {
+          const destinatarios = updatedSessionData.destinatarios || []
+          
+          if (destinatarios.length === 0) {
+            await sendPrivateMessage(senderJid, '❌ Nenhum destinatário selecionado. Digite pelo menos um número da lista ou "pronto" para continuar.')
+            nextState = 'selecionando_destinatario'
+            break
           }
 
-          // Adicionar destinatário à lista
-          updatedSessionData.destinatarios.push({
-            id: destinatarioEscolhido.id,
-            nome: destinatarioEscolhido.nome,
-            tipo: destinatarioEscolhido.tipo
-          })
+          // Continuar para escolher horário
+          nextState = 'escolhendo_horario'
+          await sendPrivateMessage(senderJid, `✅ *Destinatários selecionados: ${destinatarios.length}*\n\n`)
+          await sendInteractiveButtons(senderJid,
+            '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_',
+            BOTOES_HORARIO
+          )
 
-          delete updatedSessionData.resultados_busca
+        } else if (textoLimpo.includes(',')) {
+          // Processar múltiplos números
+          const numerosSelecionados = textoLimpo.split(',').map(n => n.trim()).filter(n => n !== '')
+          let destinatariosSelecionados: any[] = []
 
-          // Mostrar destinatários selecionados e perguntar se quer adicionar mais
-          let mensagemDestinatarios = `✅ *Destinatário adicionado:*\n${destinatarioEscolhido.nome}\n\n`
-          mensagemDestinatarios += `📋 *Total selecionado(s): ${updatedSessionData.destinatarios.length}*\n\n`
+          if (!updatedSessionData.destinatarios) updatedSessionData.destinatarios = []
 
-          updatedSessionData.destinatarios.forEach((d: any, i: number) => {
-            mensagemDestinatarios += `${i + 1}. ${d.nome}\n`
-          })
+          for (const numStr of numerosSelecionados) {
+            const num = parseInt(numStr)
+            if (!isNaN(num) && num >= 1 && num <= resultadosSalvos.length) {
+              const destinatario = resultadosSalvos[num - 1]
+              if (!updatedSessionData.destinatarios.some((d: any) => d.id === destinatario.id)) {
+                updatedSessionData.destinatarios.push({ ...destinatario })
+                destinatariosSelecionados.push(destinatario)
+              }
+            }
+          }
 
-          mensagemDestinatarios += `\n━━━━━━━━━━━━━━━━━━━━\n`
-          mensagemDestinatarios += `💡 *Deseja adicionar mais destinatários?*\n\n`
-          mensagemDestinatarios += `1️⃣ *Sim* - Adicionar mais\n`
-          mensagemDestinatarios += `2️⃣ *Não* - Continuar\n\n`
-          mensagemDestinatarios += `⚡ _Digite /voltar para mudar_\n`
-          mensagemDestinatarios += `⚡ _Digite /cancelar para sair_`
+          if (destinatariosSelecionados.length > 0) {
+            let mensagemMultipla = `✅ *Destinatários adicionados:*\n` + destinatariosSelecionados.map(d => d.nome).join('\n')
+            mensagemMultipla += `\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*\n`
+            mensagemMultipla += `\n💡 Adicione mais números ou digite "pronto" para continuar.`
+            await sendPrivateMessage(senderJid, mensagemMultipla)
+          } else {
+            await sendPrivateMessage(senderJid, `❌ Nenhum número válido encontrado. Digite números entre 1 e ${resultadosSalvos.length}, separados por vírgula.`)
+          }
+          nextState = 'selecionando_destinatario'
 
-          await sendPrivateMessage(senderJid, mensagemDestinatarios)
-          nextState = 'perguntando_mais_destinatarios'
         } else {
-          await sendPrivateMessage(senderJid, `❌ Opção inválida. Digite um número entre 1 e ${resultadosSalvos.length}`)
+          // Processar como número único ou entrada inválida
+          const numeroEscolhido = parseInt(textoLimpo)
+          if (!isNaN(numeroEscolhido) && numeroEscolhido >= 1 && numeroEscolhido <= resultadosSalvos.length) {
+            if (!updatedSessionData.destinatarios) updatedSessionData.destinatarios = []
+            
+            const destEscolhido = resultadosSalvos[numeroEscolhido - 1]
+            if (!updatedSessionData.destinatarios.some((d: any) => d.id === destEscolhido.id)) {
+              updatedSessionData.destinatarios.push({ ...destEscolhido })
+              await sendPrivateMessage(senderJid, `✅ *Destinatário adicionado:*\n${destEscolhido.nome}\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*\n\n💡 Adicione mais números ou digite "pronto" para continuar.`)
+            } else {
+              await sendPrivateMessage(senderJid, `⚠️ *Destinatário já está na lista!*\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*\n\n💡 Adicione outros números ou digite "pronto" para continuar.`)
+            }
+          } else {
+            // Se não for 'pronto', nem tiver vírgula, nem for um número válido
+            await sendPrivateMessage(senderJid, `❌ Opção inválida. Digite um número da lista, vários números separados por vírgula (ex: 1,3) ou "pronto" para continuar.`)
+          }
           nextState = 'selecionando_destinatario'
         }
         break
@@ -2118,7 +2518,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'perguntando_mais_destinatarios':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2141,11 +2541,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
           // Enviar BOTÕES de horário
           await sendInteractiveButtons(senderJid,
             '⏰ *Escolha o horário para envio:*\n\nSelecione uma opção rápida ou digite um horário personalizado (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_',
-            [
-              { id: '08:00', text: '🌅 Manhã (8h)' },
-              { id: '14:00', text: '🌞 Tarde (14h)' },
-              { id: '20:00', text: '🌙 Noite (20h)' }
-            ]
+            BOTOES_HORARIO
           )
         } else {
           await sendPrivateMessage(senderJid, `❌ Opção inválida. Digite *1* para adicionar mais ou *2* para continuar.`)
@@ -2163,7 +2559,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'escolhendo_horario':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2181,68 +2577,35 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         let horarioSelecionado = horariosMap[messageText.trim()] || messageText.trim()
 
         // Validar formato HH:MM
-        if (/^\d{2}:\d{2}$/.test(horarioSelecionado)) {
-          const [hora, minuto] = horarioSelecionado.split(':').map(Number)
-          if (hora >= 0 && hora <= 23 && minuto >= 0 && minuto <= 59) {
-            updatedSessionData.hora_envio = horarioSelecionado
-            nextState = 'escolhendo_dias'
+        if (validarHorario(horarioSelecionado)) {
+          updatedSessionData.hora_envio = horarioSelecionado
+          nextState = 'escolhendo_dias'
 
-            // Enviar BOTÕES de dias (super simples!)
-            await sendInteractiveButtons(senderJid,
-              '📅 *Escolha os dias da semana:*\n\nSelecione quando a mensagem será enviada.\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_',
-              [
-                { id: 'dias_uteis', text: '🏢 Seg-Sex' },
-                { id: 'todos_dias', text: '📆 Todos os dias' },
-                { id: 'custom_dias', text: '✏️ Personalizar' }
-              ]
-            )
-          } else {
-            await sendPrivateMessage(senderJid, '❌ Horário inválido! Use formato *HH:MM* (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_')
-            nextState = 'escolhendo_horario'
-          }
+          // Enviar BOTÕES de dias (super simples!)
+          await sendInteractiveButtons(senderJid,
+            '📅 *Escolha os dias da semana:*\n\nSelecione quando a mensagem será enviada.\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_',
+            BOTOES_DIAS
+          )
         } else {
-          await sendPrivateMessage(senderJid, `❌ *Horário inválido!*\n\n⚠️ O horário "${messageText}" não é válido!\n\n⏰ *Como informar:*\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1*, *2* ou *3*\n   OU\n✏️ Digite no formato *HH:MM* (Ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_`)
+          await sendPrivateMessage(senderJid, '❌ Horário inválido! Use formato *HH:MM* (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_')
           nextState = 'escolhendo_horario'
         }
         break
 
-      case 'aguardando_horario_custom':
-        if (!/^\d{2}:\d{2}$/.test(messageText)) {
-          await sendPrivateMessage(senderJid, '❌ Formato inválido. Use *HH:MM* (ex: 09:30)')
-          nextState = 'aguardando_horario_custom'
-        } else {
-          updatedSessionData.hora_envio = messageText
-          nextState = 'escolhendo_dias'
 
-          await sendInteractiveList(senderJid,
-            '📅 Escolha os dias',
-            'Selecione os dias da semana para envio',
-            '📆 Ver dias',
-            [
-              {
-                title: '📅 Dias da Semana',
-                rows: [
-                  { id: 'dias_uteis', title: '🏢 Dias úteis', description: 'Seg a Sex (1,2,3,4,5)' },
-                  { id: 'fim_semana', title: '🏖️ Fim de semana', description: 'Sáb e Dom (6,7)' },
-                  { id: 'todos_dias', title: '📆 Todos os dias', description: 'Seg a Dom (1,2,3,4,5,6,7)' },
-                  { id: 'custom_dias', title: '✏️ Personalizado', description: 'Escolher manualmente' }
-                ]
-              }
-            ]
-          )
-        }
-        break
 
       case 'aguardando_horario':
-        if (!/^\d{2}:\d{2}$/.test(messageText)) {
+        if (!validarHorario(messageText)) {
             await sendPrivateMessage(senderJid, '❌ Formato de horário inválido. Por favor, use *HH:MM* (ex: 09:30).');
             nextState = 'aguardando_horario';
         } else {
             updatedSessionData.hora_envio = messageText
-            nextState = 'aguardando_dias'
-            await sendPrivateMessage(
-            senderJid,
-            `📅 Em quais *dias da semana*? (números de 1 a 7, separados por vírgula)\n\n1: Seg, 2: Ter, 3: Qua, 4: Qui, 5: Sex, 6: Sáb, 7: Dom\n\n*Exemplo:* "1,3,5" para Seg, Qua e Sex.`
+            nextState = 'escolhendo_dias'
+
+            // Enviar botões de dias (unificado com fluxo moderno)
+            await sendInteractiveButtons(senderJid,
+              '📅 *Escolha os dias da semana:*\n\nSelecione quando a mensagem será enviada.\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_',
+              BOTOES_DIAS
             )
         }
         break
@@ -2250,7 +2613,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'escolhendo_dias':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2269,13 +2632,13 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
 
         if (messageText === 'custom_dias' || messageText === '3') {
           await sendPrivateMessage(senderJid, '📅 *Digite os dias separados por vírgula:*\n\n*Exemplo:* 1,3,5 para Seg, Qua e Sex\n\n1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb, 7=Dom\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
-          nextState = 'aguardando_dias'
+          nextState = 'escolhendo_dias'
           break
         } else if (diasMap[messageText]) {
           diasSelecionados = diasMap[messageText]
         } else {
           // Tentar parsear como números
-          diasSelecionados = messageText.split(',').map((d: string) => parseInt(d.trim())).filter((d: number) => !isNaN(d) && d >= 1 && d <= 7)
+            diasSelecionados = messageText.split(',').map((d: string) => parseInt(d.trim())).filter((d: number) => !isNaN(d) && d >= 1 && d <= 7)
         }
 
         if (diasSelecionados.length === 0) {
@@ -2287,11 +2650,8 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
 
           // Perguntar sobre data de término
           await sendInteractiveButtons(senderJid,
-            '� *Quando o agendamento deve terminar?*\n\nEscolha uma opção:',
-            [
-              { id: 'termino_nunca', text: '♾️ Nunca (indeterminado)' },
-              { id: 'termino_data', text: '📅 Escolher data' }
-            ]
+            MENSAGEM_ESCOLHA_TERMINO,
+            BOTOES_TERMINO
           )
         }
         break
@@ -2299,7 +2659,7 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
       case 'escolhendo_termino':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2308,42 +2668,17 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
           // Sem data de término
           updatedSessionData.data_termino = null
           nextState = 'aguardando_confirmacao'
-
-          const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
-          const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
-
-          const confirmacaoMsg = `╔═══════════════════════════╗
-║  ✅ *CONFIRMAR AGENDAMENTO*
-╚═══════════════════════════╝
-
-📝 *Mensagem:*
-${updatedSessionData.mensagem}
-
-👤 *Destinatário:*
-${updatedSessionData.destinatario_id}
-
-⏰ *Horário:*
-${updatedSessionData.hora_envio}
-
-📅 *Dias da semana:*
-${diasTexto}
-
-📆 *Término:*
-Nunca (indeterminado)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Tudo certo? Confirma o agendamento?`
-
-          await sendInteractiveButtons(senderJid, confirmacaoMsg, [
-            { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
-            { id: 'confirmar_nao', text: '❌ Não, cancelar' }
-          ])
-        } else if (messageText === 'termino_data' || messageText === '2') {
+        } else if (messageText === 'termino_30dias' || messageText === '2') {
+          // Término em 30 dias
+          const data30Dias = new Date()
+          data30Dias.setDate(data30Dias.getDate() + 30)
+          updatedSessionData.data_termino = data30Dias.toISOString().split('T')[0]
+          nextState = 'aguardando_confirmacao'
+        } else if (messageText === 'termino_custom' || messageText === 'termino_data' || messageText === '3') {
           nextState = 'aguardando_data_termino'
           await sendPrivateMessage(senderJid, '📅 *Digite a data de término:*\n\n*Formato:* DD/MM/AAAA\n*Exemplo:* 31/12/2025\n\n⚡ _Digite /voltar para não definir término_\n⚡ _Digite /cancelar para sair_')
         } else {
-          await sendPrivateMessage(senderJid, '❌ *Opção inválida!*\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1* (Nunca) ou *2* (Escolher data)\n\n⚡ _Digite /voltar para mudar os dias_\n⚡ _Digite /cancelar para sair_')
+          await sendPrivateMessage(senderJid, '❌ *Opção inválida!*\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1*, *2* ou *3*\n\n⚡ _Digite /voltar para mudar os dias_\n⚡ _Digite /cancelar para sair_')
           nextState = 'escolhendo_termino'
         }
         break
@@ -2351,7 +2686,7 @@ Tudo certo? Confirma o agendamento?`
       case 'aguardando_data_termino':
         if (messageText === '/cancelar') {
           await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+          await limparSessao(sender)
           nextState = ''
           break
         }
@@ -2359,57 +2694,6 @@ Tudo certo? Confirma o agendamento?`
         if (messageText === '/voltar') {
           updatedSessionData.data_termino = null
           nextState = 'aguardando_confirmacao'
-
-          const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
-          const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
-
-          // Montar lista de destinatários
-          const destinatarios = updatedSessionData.destinatarios || []
-          let destinatariosTexto = ''
-          let totalDestinatarios = 0
-
-          console.log('🔍 DEBUG - Destinatários na confirmação (escolhendo_termino):', JSON.stringify(destinatarios))
-
-          if (destinatarios.length > 0) {
-            destinatariosTexto = destinatarios.map((d: any, i: number) => `${i + 1}. ${d.nome}`).join('\n')
-            totalDestinatarios = destinatarios.length
-          } else if (updatedSessionData.destinatario_nome) {
-            // Fallback para compatibilidade - mostrar nome se disponível
-            destinatariosTexto = updatedSessionData.destinatario_nome
-            totalDestinatarios = 1
-          } else if (updatedSessionData.destinatario_id) {
-            // Último fallback - mostrar JID
-            destinatariosTexto = updatedSessionData.destinatario_id
-            totalDestinatarios = 1
-          }
-
-          const confirmacaoMsg = `╔═══════════════════════════╗
-║  ✅ *CONFIRMAR AGENDAMENTO*
-╚═══════════════════════════╝
-
-📝 *Mensagem:*
-${updatedSessionData.mensagem}
-
-👤 *Destinatário(s):* ${totalDestinatarios > 1 ? `(${totalDestinatarios})` : ''}
-${destinatariosTexto}
-
-⏰ *Horário:*
-${updatedSessionData.hora_envio}
-
-📅 *Dias da semana:*
-${diasTexto}
-
-📆 *Término:*
-Nunca (indeterminado)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Tudo certo? Confirma o agendamento?`
-
-          await sendInteractiveButtons(senderJid, confirmacaoMsg, [
-            { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
-            { id: 'confirmar_nao', text: '❌ Não, cancelar' }
-          ])
         } else {
           // Validar formato DD/MM/AAAA
           const dataRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/
@@ -2418,98 +2702,21 @@ Tudo certo? Confirma o agendamento?`
           if (!match) {
             await sendPrivateMessage(senderJid, '❌ *Data inválida!*\n\nUse o formato DD/MM/AAAA\n*Exemplo:* 31/12/2025')
             nextState = 'aguardando_data_termino'
+            break
+          } 
+            
+          const [_, dia, mes, ano] = match
+          const dataTermino = new Date(parseInt(ano), parseInt(mes) - 1, parseInt(dia))
+          const hoje = new Date()
+          hoje.setHours(0, 0, 0, 0)
+
+          if (dataTermino < hoje) {
+            await sendPrivateMessage(senderJid, '❌ *Data inválida!*\n\nA data de término deve ser futura.\n\nDigite novamente:')
+            nextState = 'aguardando_data_termino'
           } else {
-            const [_, dia, mes, ano] = match
-            const dataTermino = new Date(parseInt(ano), parseInt(mes) - 1, parseInt(dia))
-            const hoje = new Date()
-            hoje.setHours(0, 0, 0, 0)
-
-            if (dataTermino < hoje) {
-              await sendPrivateMessage(senderJid, '❌ *Data inválida!*\n\nA data de término deve ser futura.\n\nDigite novamente:')
-              nextState = 'aguardando_data_termino'
-            } else {
-              updatedSessionData.data_termino = dataTermino.toISOString().split('T')[0]
-              nextState = 'aguardando_confirmacao'
-
-              const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
-              const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
-
-              // Montar lista de destinatários
-              const destinatarios = updatedSessionData.destinatarios || []
-              let destinatariosTexto = ''
-              let totalDestinatarios = 0
-
-              console.log('🔍 DEBUG - Destinatários na confirmação (aguardando_data_termino):', JSON.stringify(destinatarios))
-
-              if (destinatarios.length > 0) {
-                destinatariosTexto = destinatarios.map((d: any, i: number) => `${i + 1}. ${d.nome}`).join('\n')
-                totalDestinatarios = destinatarios.length
-              } else if (updatedSessionData.destinatario_nome) {
-                // Fallback para compatibilidade - mostrar nome se disponível
-                destinatariosTexto = updatedSessionData.destinatario_nome
-                totalDestinatarios = 1
-              } else if (updatedSessionData.destinatario_id) {
-                // Último fallback - mostrar JID
-                destinatariosTexto = updatedSessionData.destinatario_id
-                totalDestinatarios = 1
-              }
-
-              const confirmacaoMsg = `╔═══════════════════════════╗
-║  ✅ *CONFIRMAR AGENDAMENTO*
-╚═══════════════════════════╝
-
-📝 *Mensagem:*
-${updatedSessionData.mensagem}
-
-👤 *Destinatário(s):* ${totalDestinatarios > 1 ? `(${totalDestinatarios})` : ''}
-${destinatariosTexto}
-
-⏰ *Horário:*
-${updatedSessionData.hora_envio}
-
-📅 *Dias da semana:*
-${diasTexto}
-
-📆 *Término:*
-${dia}/${mes}/${ano}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Tudo certo? Confirma o agendamento?`
-
-              await sendInteractiveButtons(senderJid, confirmacaoMsg, [
-                { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
-                { id: 'confirmar_nao', text: '❌ Não, cancelar' }
-              ])
-            }
+            updatedSessionData.data_termino = dataTermino.toISOString().split('T')[0]
+            nextState = 'aguardando_confirmacao'
           }
-        }
-        break
-
-      case 'aguardando_dias':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
-          nextState = ''
-          break
-        }
-
-        const dias = messageText.split(',').map((d: string) => parseInt(d.trim())).filter((d: number) => !isNaN(d) && d >= 1 && d <= 7)
-        if (dias.length === 0) {
-            await sendPrivateMessage(senderJid, '❌ Dias inválidos. Por favor, envie números de 1 a 7, separados por vírgula.\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_');
-            nextState = 'aguardando_dias';
-        } else {
-            updatedSessionData.dias_semana = dias;
-            nextState = 'escolhendo_termino'
-
-            // Perguntar sobre data de término
-            await sendInteractiveButtons(senderJid,
-              '📆 *Quando o agendamento deve terminar?*\n\nEscolha uma opção:',
-              [
-                { id: 'termino_nunca', text: '♾️ Nunca (indeterminado)' },
-                { id: 'termino_data', text: '📅 Escolher data' }
-              ]
-            )
         }
         break
 
@@ -2525,13 +2732,19 @@ Tudo certo? Confirma o agendamento?`
 
             if (!updatedSessionData.usuario_id || !updatedSessionData.mensagem || (!temDestinatarios && !temDestinatarioAntigo) || !updatedSessionData.hora_envio || !updatedSessionData.dias_semana) {
               await sendPrivateMessage(senderJid, '❌ Erro: Dados incompletos. Digite */novo* para começar novamente.')
-              await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+              await limparSessao(sender)
               nextState = ''
               break
             }
 
             // Criar agendamentos para cada destinatário
             const agendamentosParaCriar = []
+
+            // Calcular próximo envio
+            const proximoEnvio = calcularProximoEnvio(
+              updatedSessionData.hora_envio,
+              updatedSessionData.dias_semana
+            )
 
             if (temDestinatarios) {
               // Múltiplos destinatários
@@ -2545,20 +2758,29 @@ Tudo certo? Confirma o agendamento?`
                   hora_envio: updatedSessionData.hora_envio,
                   dias_semana: updatedSessionData.dias_semana,
                   data_termino: updatedSessionData.data_termino || null,
+                  proximo_envio: proximoEnvio,
                   ativo: true,
                   modificado_por: user.id
                 })
               }
             } else {
               // Destinatário único (compatibilidade)
+              let destinatarioNome = null
+              if (updatedSessionData.destinatario_tipo === 'contato') {
+                const numero = updatedSessionData.destinatario_id.split('@')[0]
+                destinatarioNome = numero
+              }
+
               agendamentosParaCriar.push({
                 usuario_id: updatedSessionData.usuario_id,
                 mensagem: updatedSessionData.mensagem,
                 destinatario_id: updatedSessionData.destinatario_id,
                 destinatario_tipo: updatedSessionData.destinatario_tipo,
+                destinatario_nome: destinatarioNome,
                 hora_envio: updatedSessionData.hora_envio,
                 dias_semana: updatedSessionData.dias_semana,
                 data_termino: updatedSessionData.data_termino || null,
+                proximo_envio: proximoEnvio,
                 ativo: true,
                 modificado_por: user.id
               })
@@ -2583,28 +2805,77 @@ Tudo certo? Confirma o agendamento?`
               }
             }
 
-            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
+            await limparSessao(sender);
 
-            const totalCriados = novosAgendamentos?.length || 1
-            const successMsg = `╔═══════════════════╗
-║  ✅ *SUCESSO!*
-╚═══════════════════╝
+            const totalCriados = novosAgendamentos?.length || 0
 
-🎉 *${totalCriados} agendamento(s) criado(s)!*
+            // Buscar nomes dos destinatários para exibir
+            const destinatariosNomes = await Promise.all(
+              agendamentosParaCriar.map(async (ag: any) =>
+                ag.destinatario_nome || await buscarNomeDestinatario(ag.destinatario_id)
+              )
+            )
 
-Sua mensagem será enviada automaticamente nos dias e horários configurados.
+            // Formatar dias da semana
+            const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+            const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
+
+            // Formatar data de término
+            const dataTerminoTexto = updatedSessionData.data_termino
+              ? new Date(updatedSessionData.data_termino + 'T12:00:00Z').toLocaleDateString('pt-BR')
+              : '♾️ Indeterminado'
+
+            // Preview da mensagem (primeiras 3 linhas ou 150 caracteres)
+            const mensagemLinhas = updatedSessionData.mensagem.split('\n')
+            const mensagemPreview = mensagemLinhas.length > 3
+              ? mensagemLinhas.slice(0, 3).join('\n') + '\n...'
+              : updatedSessionData.mensagem.length > 150
+                ? updatedSessionData.mensagem.substring(0, 150) + '...'
+                : updatedSessionData.mensagem
+
+            let successMsg = `╔═══════════════════════╗
+║  ✅ *AGENDAMENTO CRIADO!*
+╚═══════════════════════╝
+
+🎉 *${totalCriados} agendamento(s) criado(s) com sucesso!*
 
 ━━━━━━━━━━━━━━━━━━━━
-📋 Digite */listar* para ver todos
+
+📝 *MENSAGEM:*
+${mensagemPreview}
+
+━━━━━━━━━━━━━━━━━━━━
+
+⏰ *HORÁRIO:* ${updatedSessionData.hora_envio}
+📅 *DIAS:* ${diasTexto}
+📆 *TÉRMINO:* ${dataTerminoTexto}
+
+━━━━━━━━━━━━━━━━━━━━
+
+👥 *DESTINATÁRIO(S):*`
+
+            // Listar destinatários
+            destinatariosNomes.forEach((nome: string, index: number) => {
+              const tipoEmoji = agendamentosParaCriar[index].destinatario_tipo === 'grupo' ? '👥' : '📱'
+              successMsg += `\n${tipoEmoji} ${nome}`
+            })
+
+            successMsg += `
+
+━━━━━━━━━━━━━━━━━━━━
+
+✅ *Sua mensagem será enviada automaticamente!*
+
+📋 Digite */listar* para ver todos os agendamentos
 🆕 Digite */novo* para criar outro
 
 ━━━━━━━━━━━━━━━━━━━━
 _💻 Pensado e desenvolvido por AleTubeGames_`
 
             await sendPrivateMessage(senderJid, successMsg);
+            nextState = '' // Finaliza a sessão
         } else if (cancelar) {
-            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender);
-
+            await limparSessao(sender);
             const cancelMsg = `╔═══════════════╗
 ║  ❌ *Cancelado*
 ╚═══════════════╝
@@ -2612,15 +2883,65 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
 _Agendamento não foi criado._
 
 Digite */novo* para tentar novamente.`
-
             await sendPrivateMessage(senderJid, cancelMsg);
             nextState = '' // Finaliza a sessão
         } else {
-            // Opção inválida - pedir novamente
             await sendPrivateMessage(senderJid, '❌ Opção inválida! Digite *1* para confirmar ou *2* para cancelar.')
-            nextState = 'aguardando_confirmacao' // Mantém no mesmo estado
+            nextState = 'aguardando_confirmacao'
         }
         break;
+    }
+
+    // Se o estado mudou para 'aguardando_confirmacao', montar e enviar a mensagem de resumo
+    if (nextState === 'aguardando_confirmacao' && session.estado !== 'aguardando_confirmacao') {
+      const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+      const diasTexto = updatedSessionData.dias_semana.map((d: number) => diasNomes[d-1]).join(', ')
+      const dataTerminoTexto = updatedSessionData.data_termino
+        ? new Date(updatedSessionData.data_termino + 'T12:00:00Z').toLocaleDateString('pt-BR')
+        : 'Nunca (indeterminado)'
+
+      const destinatarios = updatedSessionData.destinatarios || []
+      let destinatariosTexto = ''
+      let totalDestinatarios = 0
+
+      if (destinatarios.length > 0) {
+        destinatariosTexto = destinatarios.map((d: any, i: number) => `${i + 1}. ${d.nome}`).join('\n')
+        totalDestinatarios = destinatarios.length
+      } else if (updatedSessionData.destinatario_nome) {
+        destinatariosTexto = updatedSessionData.destinatario_nome
+        totalDestinatarios = 1
+      } else if (updatedSessionData.destinatario_id) {
+        destinatariosTexto = updatedSessionData.destinatario_id
+        totalDestinatarios = 1
+      }
+
+      const confirmacaoMsg = `╔═══════════════════════════╗
+║  ✅ *CONFIRMAR AGENDAMENTO*
+╚═══════════════════════════╝
+
+📝 *Mensagem:*
+${updatedSessionData.mensagem}
+
+👤 *Destinatário(s):* ${totalDestinatarios > 1 ? `(${totalDestinatarios})` : ''}
+${destinatariosTexto}
+
+⏰ *Horário:*
+${updatedSessionData.hora_envio}
+
+📅 *Dias da semana:*
+${diasTexto}
+
+📆 *Término:*
+${dataTerminoTexto}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tudo certo? Confirma o agendamento?`
+
+      await sendInteractiveButtons(senderJid, confirmacaoMsg, [
+        { id: 'confirmar_sim', text: '✅ Sim, confirmar!' },
+        { id: 'confirmar_nao', text: '❌ Não, cancelar' }
+      ])
     }
 
     // ========================================
@@ -2638,24 +2959,45 @@ Digite */novo* para tentar novamente.`
           } else if (messageText === 'editar_horario') {
             await sendInteractiveButtons(senderJid,
               '⏰ *Escolha o novo horário:*',
-              [
-                { id: '08:00', text: '🌅 Manhã (8h)' },
-                { id: '14:00', text: '🌞 Tarde (14h)' },
-                { id: '20:00', text: '🌙 Noite (20h)' }
-              ]
+              BOTOES_HORARIO
             )
             await sendPrivateMessage(senderJid, '\n💡 _Ou digite um horário personalizado (ex: 09:30)_')
             nextState = 'editando_horario'
           } else if (messageText === 'editar_dias') {
             await sendInteractiveButtons(senderJid,
               '📅 *Escolha os novos dias:*',
-              [
-                { id: 'dias_uteis', text: '🏢 Seg-Sex' },
-                { id: 'todos_dias', text: '📆 Todos os dias' },
-                { id: 'custom_dias', text: '✏️ Personalizar' }
-              ]
+              BOTOES_DIAS
             )
             nextState = 'editando_dias'
+          } else if (messageText === 'editar_termino') {
+            await sendInteractiveButtons(senderJid,
+              MENSAGEM_ESCOLHA_TERMINO,
+              BOTOES_TERMINO
+            )
+            nextState = 'editando_termino'
+          } else if (messageText === 'editar_status') {
+            // Alternar status (ativar/desativar)
+            const novoStatus = !agendamentoOriginal.ativo
+
+            await supabaseAdmin
+              .from('agendamentos')
+              .update({ ativo: novoStatus, modificado_por: user.id })
+              .eq('id', agendamentoId)
+
+            await supabaseAdmin.from('auditoria_agendamentos').insert({
+              agendamento_id: agendamentoId,
+              usuario_id: user.id,
+              acao: 'editado',
+              dados_anteriores: { ativo: agendamentoOriginal.ativo },
+              dados_novos: { ativo: novoStatus }
+            })
+
+            const statusEmoji = novoStatus ? '✅' : '❌'
+            const statusTexto = novoStatus ? 'ativado' : 'desativado'
+
+            await sendPrivateMessage(senderJid, `${statusEmoji} *Agendamento ${statusTexto} com sucesso!*\n\n📋 Digite */listar* para ver seus agendamentos`)
+            await limparSessao(sender)
+            nextState = ''
           }
           break
 
@@ -2679,39 +3021,33 @@ Digite */novo* para tentar novamente.`
             })
 
             await sendPrivateMessage(senderJid, `✅ *Mensagem atualizada com sucesso!*\n\n📋 Digite */listar* para ver seus agendamentos`)
-            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+            await limparSessao(sender)
             nextState = ''
           }
           break
 
         case 'editando_horario':
           const novoHorario = messageText.trim()
-          if (!/^\d{2}:\d{2}$/.test(novoHorario)) {
+          if (!validarHorario(novoHorario)) {
             await sendPrivateMessage(senderJid, '❌ Formato inválido! Use *HH:MM* (ex: 09:30)')
             nextState = 'editando_horario'
           } else {
-            const [hora, minuto] = novoHorario.split(':').map(Number)
-            if (hora < 0 || hora > 23 || minuto < 0 || minuto > 59) {
-              await sendPrivateMessage(senderJid, '❌ Horário inválido! Use valores válidos.')
-              nextState = 'editando_horario'
-            } else {
-              await supabaseAdmin
-                .from('agendamentos')
-                .update({ hora_envio: novoHorario, modificado_por: user.id })
-                .eq('id', agendamentoId)
+            await supabaseAdmin
+              .from('agendamentos')
+              .update({ hora_envio: novoHorario, modificado_por: user.id })
+              .eq('id', agendamentoId)
 
-              await supabaseAdmin.from('auditoria_agendamentos').insert({
-                agendamento_id: agendamentoId,
-                usuario_id: user.id,
-                acao: 'editado',
-                dados_anteriores: { hora_envio: agendamentoOriginal.hora_envio },
-                dados_novos: { hora_envio: novoHorario }
-              })
+            await supabaseAdmin.from('auditoria_agendamentos').insert({
+              agendamento_id: agendamentoId,
+              usuario_id: user.id,
+              acao: 'editado',
+              dados_anteriores: { hora_envio: agendamentoOriginal.hora_envio },
+              dados_novos: { hora_envio: novoHorario }
+            })
 
-              await sendPrivateMessage(senderJid, `✅ *Horário atualizado para ${novoHorario}!*\n\n📋 Digite */listar* para ver seus agendamentos`)
-              await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
-              nextState = ''
-            }
+            await sendPrivateMessage(senderJid, `✅ *Horário atualizado para ${novoHorario}!*\n\n📋 Digite */listar* para ver seus agendamentos`)
+            await limparSessao(sender)
+            nextState = ''
           }
           break
 
@@ -2748,7 +3084,7 @@ Digite */novo* para tentar novamente.`
             const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
             const diasTexto = novosDias.map(d => diasNomes[d-1]).join(', ')
             await sendPrivateMessage(senderJid, `✅ *Dias atualizados para: ${diasTexto}!*\n\n📋 Digite */listar* para ver seus agendamentos`)
-            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+            await limparSessao(sender)
             nextState = ''
           }
           break
@@ -2775,8 +3111,89 @@ Digite */novo* para tentar novamente.`
             const diasNomes = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
             const diasTexto = diasCustom.map((d: number) => diasNomes[d-1]).join(', ')
             await sendPrivateMessage(senderJid, `✅ *Dias atualizados para: ${diasTexto}!*\n\n📋 Digite */listar* para ver seus agendamentos`)
-            await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', sender)
+            await limparSessao(sender)
             nextState = ''
+          }
+          break
+
+        case 'editando_termino':
+          let novaDataTermino: string | null = null
+
+          if (messageText === 'termino_nunca') {
+            novaDataTermino = null
+          } else if (messageText === 'termino_30dias') {
+            const data30Dias = new Date()
+            data30Dias.setDate(data30Dias.getDate() + 30)
+            novaDataTermino = data30Dias.toISOString().split('T')[0]
+          } else if (messageText === 'termino_custom') {
+            await sendPrivateMessage(senderJid, '📆 *Digite a data de término:*\n\n*Formato:* DD/MM/AAAA\n*Exemplo:* 31/12/2025')
+            nextState = 'editando_termino_custom'
+            break
+          }
+
+          if (nextState !== 'editando_termino_custom') {
+              await supabaseAdmin
+                .from('agendamentos')
+                .update({ data_termino: novaDataTermino, modificado_por: user.id })
+                .eq('id', agendamentoId)
+
+              await supabaseAdmin.from('auditoria_agendamentos').insert({
+                agendamento_id: agendamentoId,
+                usuario_id: user.id,
+                acao: 'editado',
+                dados_anteriores: { data_termino: agendamentoOriginal.data_termino },
+                dados_novos: { data_termino: novaDataTermino }
+              })
+
+              const terminoTexto = novaDataTermino
+                ? new Date(novaDataTermino + 'T12:00:00Z').toLocaleDateString('pt-BR')
+                : '♾️ Indeterminado'
+
+              await sendPrivateMessage(senderJid, `✅ *Data de término atualizada para: ${terminoTexto}!*\n\n📋 Digite */listar* para ver seus agendamentos`)
+              await limparSessao(sender)
+              nextState = ''
+          }
+          break
+
+        case 'editando_termino_custom':
+          // Validar formato DD/MM/AAAA
+          const dataMatch = messageText.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+          if (!dataMatch) {
+            await sendPrivateMessage(senderJid, '❌ Formato inválido! Use DD/MM/AAAA (ex: 31/12/2025)')
+            nextState = 'editando_termino_custom'
+          } else {
+            const [, dia, mes, ano] = dataMatch
+            const dataTerminoCustom = `${ano}-${mes}-${dia}`
+
+            // Validar se a data é válida e futura
+            const dataObj = new Date(parseInt(ano), parseInt(mes) - 1, parseInt(dia))
+            const hoje = new Date()
+            hoje.setHours(0, 0, 0, 0)
+
+            if (isNaN(dataObj.getTime())) {
+              await sendPrivateMessage(senderJid, '❌ Data inválida! Verifique o dia, mês e ano.')
+              nextState = 'editando_termino_custom'
+            } else if (dataObj < hoje) {
+              await sendPrivateMessage(senderJid, '❌ A data de término deve ser futura!')
+              nextState = 'editando_termino_custom'
+            } else {
+              await supabaseAdmin
+                .from('agendamentos')
+                .update({ data_termino: dataTerminoCustom, modificado_por: user.id })
+                .eq('id', agendamentoId)
+
+              await supabaseAdmin.from('auditoria_agendamentos').insert({
+                agendamento_id: agendamentoId,
+                usuario_id: user.id,
+                acao: 'editado',
+                dados_anteriores: { data_termino: agendamentoOriginal.data_termino },
+                dados_novos: { data_termino: dataTerminoCustom }
+              })
+
+              await sendPrivateMessage(senderJid, `✅ *Data de término atualizada para: ${dataObj.toLocaleDateString('pt-BR')}!*\n\n📋 Digite */listar* para ver seus agendamentos`)
+              await limparSessao(sender)
+              nextState = ''
+            }
           }
           break
       }
