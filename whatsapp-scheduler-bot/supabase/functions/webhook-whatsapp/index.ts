@@ -2120,16 +2120,24 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         } else if (messageText === 'melhorar_nao' || messageText === '2' || messageText.toLowerCase().includes('não') || messageText.toLowerCase().includes('nao')) {
           // Usar mensagem original
           updatedSessionData.mensagem = updatedSessionData.mensagem_original
-          nextState = 'escolhendo_destinatario'
 
-          // Pedir para digitar o nome do grupo/contato
-          await sendPrivateMessage(senderJid,
-            `👥 *Digite o nome do grupo ou contato:*\n\n` +
-            `💡 *Exemplos:*\n` +
-            `• Para grupos: Digite parte do nome (ex: "Petrópolis")\n` +
-            `• Para contatos: Digite o número com DDD (ex: 5531999999999)\n\n` +
+          // Perguntar sobre randomização
+          nextState = 'perguntando_randomizar'
+          await sendInteractiveButtons(senderJid,
+            `✅ *Mensagem salva!*\n\n` +
+            `"${updatedSessionData.mensagem}"\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🎲 *Quer RANDOMIZAR esta mensagem?*\n\n` +
+            `A IA criará variações diferentes mantendo o mesmo sentido.\n` +
+            `Isso torna suas mensagens mais naturais e evita parecer robô!\n\n` +
+            `⚠️ *AVISO:* As variações são geradas por IA. Não garantimos 100% de precisão, ` +
+            `mas a ideia é manter o mesmo sentido da mensagem original.\n\n` +
             `⚡ _Digite /voltar para mudar a mensagem_\n` +
-            `⚡ _Digite /cancelar para sair_`
+            `⚡ _Digite /cancelar para sair_`,
+            [
+              { id: '1', text: '✨ Sim, randomizar!' },
+              { id: '2', text: '➡️ Não, manter sempre igual' }
+            ]
           )
         } else {
           // Usuário digitou texto livre - interpretar como correção da mensagem
@@ -2148,25 +2156,44 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         }
 
         if (messageText === 'aprovar_ia' || messageText === '1' || messageText.toLowerCase().includes('aprovar')) {
-          // Mensagem já está salva (melhorada)
-          nextState = 'escolhendo_destinatario'
-          await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
-
-━━━━━━━━━━━━━━━━━━━━
-💡 _Exemplo: Família Silva ou 5511999999999_
-
-⚡ _Digite /voltar para mudar a mensagem_
-⚡ _Digite /cancelar para sair_`)
+          // Mensagem já está salva (melhorada) - perguntar sobre randomização
+          nextState = 'perguntando_randomizar'
+          await sendInteractiveButtons(senderJid,
+            `✅ *Mensagem aprovada!*\n\n` +
+            `"${updatedSessionData.mensagem}"\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🎲 *Quer RANDOMIZAR esta mensagem?*\n\n` +
+            `A cada envio, a IA criará uma variação diferente mantendo o mesmo sentido.\n` +
+            `Isso torna suas mensagens mais naturais e evita parecer robô!\n\n` +
+            `⚠️ *AVISO:* As variações são geradas por IA no momento do envio. ` +
+            `Não garantimos 100% de precisão, mas a ideia é manter o mesmo sentido da mensagem original.\n\n` +
+            `⚡ _Digite /voltar para mudar a mensagem_\n` +
+            `⚡ _Digite /cancelar para sair_`,
+            [
+              { id: '1', text: '✨ Sim, randomizar!' },
+              { id: '2', text: '➡️ Não, sempre igual' }
+            ]
+          )
         } else if (messageText === 'usar_original' || messageText === '2') {
           updatedSessionData.mensagem = updatedSessionData.mensagem_original
-          nextState = 'escolhendo_destinatario'
-          await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
-
-━━━━━━━━━━━━━━━━━━━━
-💡 _Exemplo: Família Silva ou 5511999999999_
-
-⚡ _Digite /voltar para mudar a mensagem_
-⚡ _Digite /cancelar para sair_`)
+          // Perguntar sobre randomização
+          nextState = 'perguntando_randomizar'
+          await sendInteractiveButtons(senderJid,
+            `✅ *Mensagem salva!*\n\n` +
+            `"${updatedSessionData.mensagem}"\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🎲 *Quer RANDOMIZAR esta mensagem?*\n\n` +
+            `A cada envio, a IA criará uma variação diferente mantendo o mesmo sentido.\n` +
+            `Isso torna suas mensagens mais naturais e evita parecer robô!\n\n` +
+            `⚠️ *AVISO:* As variações são geradas por IA no momento do envio. ` +
+            `Não garantimos 100% de precisão, mas a ideia é manter o mesmo sentido da mensagem original.\n\n` +
+            `⚡ _Digite /voltar para mudar a mensagem_\n` +
+            `⚡ _Digite /cancelar para sair_`,
+            [
+              { id: '1', text: '✨ Sim, randomizar!' },
+              { id: '2', text: '➡️ Não, sempre igual' }
+            ]
+          )
         } else if (messageText === 'editar_manual' || messageText === '3') {
           await sendPrivateMessage(senderJid, `✏️ *Digite a nova mensagem:*
 
@@ -2189,13 +2216,58 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
 
         updatedSessionData.mensagem_original = messageText
         updatedSessionData.mensagem = messageText
+
+        // Perguntar sobre randomização
+        nextState = 'perguntando_randomizar'
+        await sendInteractiveButtons(senderJid,
+          `✅ *Mensagem salva!*\n\n` +
+          `"${messageText}"\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `🎲 *Quer RANDOMIZAR esta mensagem?*\n\n` +
+          `A cada envio, a IA criará uma variação diferente mantendo o mesmo sentido.\n` +
+          `Isso torna suas mensagens mais naturais e evita parecer robô!\n\n` +
+          `⚠️ *AVISO:* As variações são geradas por IA no momento do envio. ` +
+          `Não garantimos 100% de precisão, mas a ideia é manter o mesmo sentido da mensagem original.\n\n` +
+          `⚡ _Digite /voltar para mudar a mensagem_\n` +
+          `⚡ _Digite /cancelar para sair_`,
+          [
+            { id: '1', text: '✨ Sim, randomizar!' },
+            { id: '2', text: '➡️ Não, manter sempre igual' }
+          ]
+        )
+        break
+
+      case 'perguntando_randomizar':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await limparSessao(sender)
+          nextState = ''
+          break
+        }
+
+        // Salvar escolha de randomização
+        if (messageText === '1' || messageText.toLowerCase().includes('sim')) {
+          updatedSessionData.randomizar = true
+          await sendPrivateMessage(senderJid,
+            `✨ *Randomização ativada!*\n\n` +
+            `A cada envio, a IA criará uma variação única da sua mensagem.\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `📋 *Digite o nome do grupo ou número do contato*\n\n` +
+            `💡 _Exemplo: Família Silva ou 5511999999999_\n\n` +
+            `⚡ _Digite /voltar para mudar a mensagem_\n` +
+            `⚡ _Digite /cancelar para sair_`
+          )
+        } else {
+          updatedSessionData.randomizar = false
+          await sendPrivateMessage(senderJid,
+            `📋 *Digite o nome do grupo ou número do contato*\n\n` +
+            `💡 _Exemplo: Família Silva ou 5511999999999_\n\n` +
+            `⚡ _Digite /voltar para mudar a mensagem_\n` +
+            `⚡ _Digite /cancelar para sair_`
+          )
+        }
+
         nextState = 'escolhendo_destinatario'
-        await sendPrivateMessage(senderJid, `✅ *Mensagem salva!*\n\n"${messageText}"\n\n━━━━━━━━━━━━━━━━━━━━\n📋 *Digite o nome do grupo ou número do contato*
-
-💡 _Exemplo: Família Silva ou 5511999999999_
-
-⚡ _Digite /voltar para mudar a mensagem_
-⚡ _Digite /cancelar para sair_`)
         break
 
       case 'escolhendo_destinatario':
@@ -2760,6 +2832,7 @@ Digite */novo* para tentar novamente.`)
                   data_termino: updatedSessionData.data_termino || null,
                   proximo_envio: proximoEnvio,
                   ativo: true,
+                  randomizar: updatedSessionData.randomizar || false,
                   modificado_por: user.id
                 })
               }
@@ -2782,6 +2855,7 @@ Digite */novo* para tentar novamente.`)
                 data_termino: updatedSessionData.data_termino || null,
                 proximo_envio: proximoEnvio,
                 ativo: true,
+                randomizar: updatedSessionData.randomizar || false,
                 modificado_por: user.id
               })
             }
