@@ -196,6 +196,50 @@ async function processarAgendamentos() {
         console.log(`   Mensagem original: ${agendamento.mensagem.substring(0, 50)}...`);
         console.log(`   Randomizar: ${agendamento.randomizar ? 'SIM' : 'NÃO'}`);
 
+        // ========================================
+        // PROTEÇÃO: Verificar se já foi enviado HOJE
+        // ========================================
+        const hoje = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+        const { data: enviosHoje, error: erroHistorico } = await supabase
+          .from('historico_envios')
+          .select('id, enviado_em')
+          .eq('agendamento_id', agendamento.id)
+          .eq('status', 'enviado')
+          .gte('enviado_em', `${hoje}T00:00:00Z`)
+          .lte('enviado_em', `${hoje}T23:59:59Z`);
+
+        if (erroHistorico) {
+          console.error('❌ Erro ao verificar histórico:', erroHistorico);
+        } else if (enviosHoje && enviosHoje.length > 0) {
+          console.log(`⏭️  IGNORADO: Mensagem já enviada hoje (${enviosHoje.length}x)`);
+          console.log(`   Último envio: ${enviosHoje[0].enviado_em}`);
+
+          // Calcular próximo envio para amanhã
+          const proximoEnvio = calcularProximoEnvio(
+            agendamento.hora_envio,
+            agendamento.dias_semana
+          );
+
+          if (proximoEnvio) {
+            const proximoEnvioISO = proximoEnvio.toISOString();
+            await supabase
+              .from('agendamentos')
+              .update({ proximo_envio: proximoEnvioISO })
+              .eq('id', agendamento.id);
+
+            console.log(`   ⏰ Próximo envio atualizado para: ${proximoEnvioISO}`);
+          }
+
+          continue; // Pular para o próximo agendamento
+        }
+
+        console.log(`✅ Verificação OK: Nenhum envio hoje para este agendamento`);
+
+        // ========================================
+        // FIM DA PROTEÇÃO
+        // ========================================
+
         // Determinar mensagem final
         let mensagemFinal = agendamento.mensagem;
 

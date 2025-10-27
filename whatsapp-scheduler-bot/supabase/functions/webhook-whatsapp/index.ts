@@ -330,35 +330,6 @@ async function sendButtons(recipient: string, message: string, buttons: Array<{i
   await sendText(recipient, optionsText)
 }
 
-// Função para enviar lista como texto numerado (compatível com todos os dispositivos)
-async function sendList(recipient: string, title: string, description: string, _buttonText: string, sections: Array<{title: string, rows: Array<{id: string, title: string, description?: string}>}>) {
-  let listText = `*${title}*\n\n${description}\n\n`
-
-  let optionNumber = 1
-  sections.forEach(section => {
-    listText += `📋 *${section.title}*\n`
-    section.rows.forEach(row => {
-      listText += `${optionNumber}️⃣ ${row.title}`
-      if (row.description) {
-        listText += ` - ${row.description}`
-      }
-      listText += '\n'
-      optionNumber++
-    })
-    listText += '\n'
-  })
-
-  listText += '💬 *Digite o número da opção desejada*'
-
-  await sendText(recipient, listText)
-}
-
-// Função para enviar LISTA INTERATIVA (sempre usa texto numerado com Baileys)
-async function sendInteractiveList(recipient: string, title: string, description: string, buttonText: string, sections: Array<{title: string, rows: Array<{id: string, title: string, description?: string}>}>) {
-  console.log('📋 Enviando lista como texto numerado (Baileys)...')
-  await sendList(recipient, title, description, buttonText, sections)
-}
-
 // Função para enviar BOTÕES INTERATIVOS (sempre usa texto numerado com Baileys)
 async function sendInteractiveButtons(recipient: string, message: string, buttons: Array<{id: string, text: string}>) {
   console.log('🔘 Enviando botões como texto numerado (Baileys)...')
@@ -456,6 +427,50 @@ serve(async (req: Request) => {
       console.log('⏭️ [WEBHOOK] Mensagem do próprio bot ignorada (fromMe: true)')
       return new Response('Mensagem do próprio bot ignorada.', { status: 200 });
     }
+
+    // ========================================
+    // PROTEÇÃO CONTRA LOOPS E DUPLICATAS (APENAS WEBHOOKS)
+    // ========================================
+
+    const messageId = body.data.key.id
+    console.log(`🔍 [WEBHOOK] Verificando duplicata para messageId: ${messageId}`)
+
+    // Verificar no banco de dados se a mensagem já foi processada NOS ÚLTIMOS 5 MINUTOS
+    // Isso previne loops infinitos mas permite agendamentos recorrentes
+    const { data: mensagensRecentes, error: erroVerificacao } = await supabaseAdmin
+      .from('mensagens_processadas')
+      .select('id, processado_em')
+      .eq('message_id', messageId)
+      .gte('expira_em', new Date().toISOString())
+      .limit(1)
+
+    if (erroVerificacao) {
+      console.error('❌ [WEBHOOK] Erro ao verificar mensagem processada:', erroVerificacao)
+      // Continuar mesmo com erro (fail-safe)
+    } else if (mensagensRecentes && mensagensRecentes.length > 0) {
+      const processadoEm = new Date(mensagensRecentes[0].processado_em)
+      const agora = new Date()
+      const diferencaSegundos = Math.floor((agora.getTime() - processadoEm.getTime()) / 1000)
+
+      console.log(`⏭️ [WEBHOOK] Mensagem duplicada ignorada (ID: ${messageId}, processada há ${diferencaSegundos}s)`)
+      return new Response('Mensagem duplicada ignorada.', { status: 200 })
+    }
+
+    // Registrar mensagem como processada (expira em 5 minutos)
+    const { error: erroInsert } = await supabaseAdmin
+      .from('mensagens_processadas')
+      .insert({
+        message_id: messageId,
+        sender: sender,
+        expira_em: new Date(Date.now() + 5 * 60 * 1000).toISOString() // 5 minutos
+      })
+
+    if (erroInsert) {
+      console.error('❌ [WEBHOOK] Erro ao registrar mensagem processada:', erroInsert)
+      // Continuar mesmo com erro (fail-safe)
+    }
+
+    console.log(`✅ [WEBHOOK] Mensagem aceita para processamento (ID: ${messageId})`)
 
     // 1. Buscar usuário (ativo ou inativo)
     console.log('🔍 [WEBHOOK] Buscando usuário no banco:', sender)
@@ -2535,9 +2550,11 @@ Digite */novo* para tentar novamente.`)
 
         if (textoLimpo === 'pronto') {
           const destinatarios = updatedSessionData.destinatarios || []
-          
+
           if (destinatarios.length === 0) {
+            // Entrada inválida: envie o erro e mantenha o estado explicitamente
             await sendPrivateMessage(senderJid, '❌ Nenhum destinatário selecionado. Digite pelo menos um número da lista ou "pronto" para continuar.')
+            // Explicitamente mantenha o estado atual
             nextState = 'selecionando_destinatario'
             break
           }
@@ -2573,17 +2590,21 @@ Digite */novo* para tentar novamente.`)
             mensagemMultipla += `\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*\n`
             mensagemMultipla += `\n💡 Adicione mais números ou digite "pronto" para continuar.`
             await sendPrivateMessage(senderJid, mensagemMultipla)
+            // Explicitamente mantenha o estado atual
+            nextState = 'selecionando_destinatario'
           } else {
+            // Entrada inválida: envie o erro e mantenha o estado explicitamente
             await sendPrivateMessage(senderJid, `❌ Nenhum número válido encontrado. Digite números entre 1 e ${resultadosSalvos.length}, separados por vírgula.`)
+            // Explicitamente mantenha o estado atual
+            nextState = 'selecionando_destinatario'
           }
-          nextState = 'selecionando_destinatario'
 
         } else {
           // Processar como número único ou entrada inválida
           const numeroEscolhido = parseInt(textoLimpo)
           if (!isNaN(numeroEscolhido) && numeroEscolhido >= 1 && numeroEscolhido <= resultadosSalvos.length) {
             if (!updatedSessionData.destinatarios) updatedSessionData.destinatarios = []
-            
+
             const destEscolhido = resultadosSalvos[numeroEscolhido - 1]
             if (!updatedSessionData.destinatarios.some((d: any) => d.id === destEscolhido.id)) {
               updatedSessionData.destinatarios.push({ ...destEscolhido })
@@ -2591,11 +2612,14 @@ Digite */novo* para tentar novamente.`)
             } else {
               await sendPrivateMessage(senderJid, `⚠️ *Destinatário já está na lista!*\n\n📋 *Total na lista: ${updatedSessionData.destinatarios.length}*\n\n💡 Adicione outros números ou digite "pronto" para continuar.`)
             }
+            // Explicitamente mantenha o estado atual
+            nextState = 'selecionando_destinatario'
           } else {
-            // Se não for 'pronto', nem tiver vírgula, nem for um número válido
+            // Entrada inválida: envie o erro e mantenha o estado explicitamente
             await sendPrivateMessage(senderJid, `❌ Opção inválida. Digite um número da lista, vários números separados por vírgula (ex: 1,3) ou "pronto" para continuar.`)
+            // Explicitamente mantenha o estado atual
+            nextState = 'selecionando_destinatario'
           }
-          nextState = 'selecionando_destinatario'
         }
         break
 
@@ -2658,7 +2682,7 @@ Digite */novo* para tentar novamente.`)
           '3': '20:00'
         }
 
-        let horarioSelecionado = horariosMap[messageText.trim()] || messageText.trim()
+        const horarioSelecionado = horariosMap[messageText.trim()] || messageText.trim()
 
         // Validar formato HH:MM
         if (validarHorario(horarioSelecionado)) {
@@ -2671,7 +2695,9 @@ Digite */novo* para tentar novamente.`)
             BOTOES_DIAS
           )
         } else {
+          // Entrada inválida: envie o erro e mantenha o estado explicitamente
           await sendPrivateMessage(senderJid, '❌ Horário inválido! Use formato *HH:MM* (ex: 09:30)\n\n⚡ _Digite /voltar para mudar o destinatário_\n⚡ _Digite /cancelar para sair_')
+          // Explicitamente mantenha o estado atual
           nextState = 'escolhendo_horario'
         }
         break
@@ -2679,9 +2705,18 @@ Digite */novo* para tentar novamente.`)
 
 
       case 'aguardando_horario':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await limparSessao(sender)
+          nextState = ''
+          break
+        }
+
         if (!validarHorario(messageText)) {
+            // Entrada inválida: envie o erro e mantenha o estado explicitamente
             await sendPrivateMessage(senderJid, '❌ Formato de horário inválido. Por favor, use *HH:MM* (ex: 09:30).');
-            nextState = 'aguardando_horario';
+            // Explicitamente mantenha o estado atual
+            nextState = 'aguardando_horario'
         } else {
             updatedSessionData.hora_envio = messageText
             nextState = 'escolhendo_dias'
@@ -2702,37 +2737,67 @@ Digite */novo* para tentar novamente.`)
           break
         }
 
-        let diasSelecionados: number[] = []
+        // Se o usuário quer personalizar, mude para um novo estado
+        if (messageText === 'custom_dias' || messageText === '3') {
+          await sendPrivateMessage(senderJid, '📅 *Digite os dias separados por vírgula:*\n\n*Exemplo:* 1,3,5 para Seg, Qua e Sex\n\n1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb, 7=Dom\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
+          nextState = 'aguardando_dias_custom'
+          break
+        }
 
-        // Mapear seleções pré-definidas (SIMPLIFICADO) - aceitar número ou ID
+        // Mapear seleções pré-definidas
         const diasMap: Record<string, number[]> = {
           'dias_uteis': [1, 2, 3, 4, 5],
           'todos_dias': [1, 2, 3, 4, 5, 6, 7],
-          'custom_dias': [],
           '1': [1, 2, 3, 4, 5],  // Seg-Sex
-          '2': [1, 2, 3, 4, 5, 6, 7],  // Todos os dias
-          '3': []  // Personalizar
+          '2': [1, 2, 3, 4, 5, 6, 7]  // Todos os dias
         }
 
-        if (messageText === 'custom_dias' || messageText === '3') {
-          await sendPrivateMessage(senderJid, '📅 *Digite os dias separados por vírgula:*\n\n*Exemplo:* 1,3,5 para Seg, Qua e Sex\n\n1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb, 7=Dom\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
-          nextState = 'escolhendo_dias'
-          break
-        } else if (diasMap[messageText]) {
-          diasSelecionados = diasMap[messageText]
-        } else {
-          // Tentar parsear como números
-            diasSelecionados = messageText.split(',').map((d: string) => parseInt(d.trim())).filter((d: number) => !isNaN(d) && d >= 1 && d <= 7)
-        }
+        const diasSelecionados = diasMap[messageText] || []
 
-        if (diasSelecionados.length === 0) {
-          await sendPrivateMessage(senderJid, '❌ Seleção inválida!\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1*, *2* ou *3*\n   OU\n✏️ Digite os números separados por vírgula (ex: 1,3,5)\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
-          nextState = 'escolhendo_dias'
-        } else {
+        if (diasSelecionados.length > 0) {
           updatedSessionData.dias_semana = diasSelecionados
           nextState = 'escolhendo_termino'
 
           // Perguntar sobre data de término
+          await sendInteractiveButtons(senderJid,
+            MENSAGEM_ESCOLHA_TERMINO,
+            BOTOES_TERMINO
+          )
+        } else {
+          // Entrada inválida: envie o erro e mantenha o estado explicitamente
+          await sendPrivateMessage(senderJid, '❌ Seleção inválida!\n\n🔘 Clique em um dos botões acima\n   OU\n✏️ Digite *1*, *2* ou *3*\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
+          // Explicitamente mantenha o estado atual
+          nextState = 'escolhendo_dias'
+        }
+        break
+
+      case 'aguardando_dias_custom':
+        if (messageText === '/cancelar') {
+          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+          await limparSessao(sender)
+          nextState = ''
+          break
+        }
+
+        if (messageText === '/voltar') {
+          nextState = 'escolhendo_horario'
+          await sendInteractiveButtons(senderJid,
+            `⏰ *Escolha o horário de envio:*\n\n⚡ _Digite /cancelar para sair_`,
+            BOTOES_HORARIO
+          )
+          break
+        }
+
+        const diasCustom = messageText.split(',').map((d: string) => parseInt(d.trim())).filter((d: number) => !isNaN(d) && d >= 1 && d <= 7)
+
+        if (diasCustom.length === 0) {
+          await sendPrivateMessage(senderJid, '❌ Dias inválidos!\n\nDigite os números de 1 a 7 separados por vírgula.\n\n*Exemplo:* 1,3,5\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
+          // Explicitamente mantenha o estado atual
+          nextState = 'aguardando_dias_custom'
+        } else {
+          updatedSessionData.dias_semana = diasCustom
+          nextState = 'escolhendo_termino'
+
           await sendInteractiveButtons(senderJid,
             MENSAGEM_ESCOLHA_TERMINO,
             BOTOES_TERMINO

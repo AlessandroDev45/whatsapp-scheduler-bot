@@ -72,7 +72,7 @@ export async function processIncomingMessage(sock, message) {
       data: {
         key: {
           remoteJid,
-          fromMe: false,
+          fromMe: message.key.fromMe || false, // ← USAR O VALOR REAL DA MENSAGEM!
           id: message.key.id,
           participant: isGroup ? sender : undefined
         },
