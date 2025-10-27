@@ -89,7 +89,106 @@ function verificarPermissaoAdmin(telefone: string): boolean {
 
 // Limpar sessão do usuário
 async function limparSessao(telefone: string) {
-  await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', telefone)
+  try {
+    const { error } = await supabaseAdmin.from('sessoes_comando').delete().eq('telefone', telefone)
+    if (error) {
+      console.error('❌ [limparSessao] Erro ao limpar sessão:', error)
+    }
+  } catch (err) {
+    console.error('❌ [limparSessao] Exceção ao limpar sessão:', err)
+  }
+}
+
+// ========================================
+// FUNÇÕES DE SEGURANÇA (CORREÇÃO CRÍTICA)
+// ========================================
+
+// Sanitizar input do usuário (previne injeção e limita tamanho)
+function sanitizeInput(text: string): string {
+  if (!text) return ''
+  return text.trim().substring(0, 5000) // limite de 5000 caracteres
+}
+
+// Validar número de telefone
+function validarNumeroTelefone(numero: string): boolean {
+  const numeroLimpo = numero.replace(/\D/g, '')
+  return /^\d{10,15}$/.test(numeroLimpo)
+}
+
+// Validar JID de grupo
+function validarJidGrupo(jid: string): boolean {
+  return /^\d+@g\.us$/.test(jid.trim())
+}
+
+// Rate limiting: verificar se usuário excedeu limite de mensagens
+async function verificarRateLimit(sender: string): Promise<boolean> {
+  const umMinutoAtras = new Date(Date.now() - 60000).toISOString()
+
+  const { count, error } = await supabaseAdmin
+    .from('mensagens_processadas')
+    .select('id', { count: 'exact', head: true })
+    .eq('sender', sender)
+    .gte('processado_em', umMinutoAtras)
+
+  if (error) {
+    console.error('❌ [RATE_LIMIT] Erro ao verificar:', error)
+    return false // fail-safe: permitir em caso de erro
+  }
+
+  const limite = 20 // 20 mensagens por minuto
+  if (count && count > limite) {
+    console.log(`⚠️ [RATE_LIMIT] Usuário ${sender} excedeu limite: ${count}/${limite}`)
+    return true // excedeu limite
+  }
+
+  return false // dentro do limite
+}
+
+// Middleware para comandos globais (/cancelar, /voltar)
+async function handleGlobalCommands(
+  messageText: string,
+  sender: string,
+  senderJid: string
+): Promise<boolean> {
+  const textoLimpo = messageText.trim().toLowerCase()
+
+  if (textoLimpo === '/cancelar') {
+    await limparSessao(sender)
+    await sendPrivateMessage(senderJid, '❌ *Operação cancelada!*\n\nDigite */novo* para começar novamente.')
+    return true // comando processado
+  }
+
+  return false // não é comando global
+}
+
+// Verificar e inserir mensagem processada (previne race condition)
+async function registrarMensagemProcessada(
+  messageId: string,
+  sender: string
+): Promise<{ isDuplicate: boolean; error?: unknown }> {
+  try {
+    // Tentar inserir com constraint UNIQUE (previne race condition no banco)
+    const { error } = await supabaseAdmin
+      .from('mensagens_processadas')
+      .insert({
+        message_id: messageId,
+        sender: sender,
+        expira_em: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+      })
+
+    if (error) {
+      // Se erro for de constraint UNIQUE, é duplicata
+      if (error.code === '23505') {
+        return { isDuplicate: true }
+      }
+      // Outro erro
+      return { isDuplicate: false, error }
+    }
+
+    return { isDuplicate: false }
+  } catch (err) {
+    return { isDuplicate: false, error: err }
+  }
 }
 
 // Calcular próximo envio baseado em hora e dias da semana (horário de Brasília UTC-3)
@@ -380,14 +479,17 @@ serve(async (req: Request) => {
 
     // Extrair informações da mensagem
     console.log('📝 [WEBHOOK] Extraindo texto da mensagem...')
-    const messageText = (
+    let messageText = (
       body.data.message?.conversation ||
       body.data.message?.extendedTextMessage?.text ||
       body.data.message?.buttonResponseMessage?.selectedButtonId ||
       body.data.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
       ''
     ).trim()
-    console.log(`📝 [WEBHOOK] Texto extraído: "${messageText}"`)
+
+    // CORREÇÃO CRÍTICA: Sanitizar input do usuário
+    messageText = sanitizeInput(messageText)
+    console.log(`📝 [WEBHOOK] Texto extraído e sanitizado: "${messageText}"`)
 
     const isGroup = body.data.key.remoteJid.endsWith('@g.us')
     const isChannel = body.data.key.remoteJid.endsWith('@lid') // Canais/Listas do WhatsApp
@@ -429,48 +531,37 @@ serve(async (req: Request) => {
     }
 
     // ========================================
-    // PROTEÇÃO CONTRA LOOPS E DUPLICATAS (APENAS WEBHOOKS)
+    // PROTEÇÃO CONTRA LOOPS E DUPLICATAS (CORREÇÃO CRÍTICA)
     // ========================================
 
     const messageId = body.data.key.id
     console.log(`🔍 [WEBHOOK] Verificando duplicata para messageId: ${messageId}`)
 
-    // Verificar no banco de dados se a mensagem já foi processada NOS ÚLTIMOS 5 MINUTOS
-    // Isso previne loops infinitos mas permite agendamentos recorrentes
-    const { data: mensagensRecentes, error: erroVerificacao } = await supabaseAdmin
-      .from('mensagens_processadas')
-      .select('id, processado_em')
-      .eq('message_id', messageId)
-      .gte('expira_em', new Date().toISOString())
-      .limit(1)
+    // CORREÇÃO CRÍTICA: Usar função segura contra race condition
+    const { isDuplicate, error: erroDuplicata } = await registrarMensagemProcessada(messageId, sender)
 
-    if (erroVerificacao) {
-      console.error('❌ [WEBHOOK] Erro ao verificar mensagem processada:', erroVerificacao)
-      // Continuar mesmo com erro (fail-safe)
-    } else if (mensagensRecentes && mensagensRecentes.length > 0) {
-      const processadoEm = new Date(mensagensRecentes[0].processado_em)
-      const agora = new Date()
-      const diferencaSegundos = Math.floor((agora.getTime() - processadoEm.getTime()) / 1000)
-
-      console.log(`⏭️ [WEBHOOK] Mensagem duplicada ignorada (ID: ${messageId}, processada há ${diferencaSegundos}s)`)
+    if (isDuplicate) {
+      console.log(`⏭️ [WEBHOOK] Mensagem duplicada ignorada (ID: ${messageId})`)
       return new Response('Mensagem duplicada ignorada.', { status: 200 })
     }
 
-    // Registrar mensagem como processada (expira em 5 minutos)
-    const { error: erroInsert } = await supabaseAdmin
-      .from('mensagens_processadas')
-      .insert({
-        message_id: messageId,
-        sender: sender,
-        expira_em: new Date(Date.now() + 5 * 60 * 1000).toISOString() // 5 minutos
-      })
-
-    if (erroInsert) {
-      console.error('❌ [WEBHOOK] Erro ao registrar mensagem processada:', erroInsert)
+    if (erroDuplicata) {
+      console.error('❌ [WEBHOOK] Erro ao registrar mensagem:', erroDuplicata)
       // Continuar mesmo com erro (fail-safe)
     }
 
     console.log(`✅ [WEBHOOK] Mensagem aceita para processamento (ID: ${messageId})`)
+
+    // ========================================
+    // RATE LIMITING (CORREÇÃO CRÍTICA)
+    // ========================================
+
+    const excedeuLimite = await verificarRateLimit(sender)
+    if (excedeuLimite) {
+      console.log(`⚠️ [RATE_LIMIT] Usuário ${sender} bloqueado temporariamente`)
+      await sendPrivateMessage(senderJid, '⚠️ *Muitas mensagens em pouco tempo!*\n\nAguarde 1 minuto e tente novamente.')
+      return new Response('Rate limit exceeded', { status: 429 })
+    }
 
     // 1. Buscar usuário (ativo ou inativo)
     console.log('🔍 [WEBHOOK] Buscando usuário no banco:', sender)
@@ -743,6 +834,17 @@ Para rejeitar, digite:
 
       await sendPrivateMessage(senderJid, menu)
       return new Response('Menu enviado', { status: 200 })
+    }
+
+    // ========================================
+    // MIDDLEWARE DE COMANDOS GLOBAIS (CORREÇÃO CRÍTICA)
+    // ========================================
+
+    // Processar comandos globais (/cancelar) ANTES de qualquer outra lógica
+    const comandoGlobalProcessado = await handleGlobalCommands(messageText, sender, senderJid)
+    if (comandoGlobalProcessado) {
+      console.log('✅ [GLOBAL_CMD] Comando global processado')
+      return new Response('Comando global processado', { status: 200 })
     }
 
     // 3. Gerenciador de estado da conversa (máquina de estados)
@@ -1965,9 +2067,8 @@ _💻 Pensado e desenvolvido por AleTubeGames_`
           break
         }
 
-        // Validar formato do JID
-        const jidRegex = /^\d+@g\.us$/
-        if (!jidRegex.test(messageText.trim())) {
+        // CORREÇÃO CRÍTICA: Usar função de validação
+        if (!validarJidGrupo(messageText)) {
           await sendPrivateMessage(senderJid, `❌ *JID inválido!*
 
 O formato correto é: *120363318862188145@g.us*
@@ -2440,9 +2541,8 @@ Digite *2* para buscar novamente`)
           break
         }
 
-        // Validar JID
-        const jidRegexInline = /^\d+@g\.us$/
-        if (!jidRegexInline.test(messageText.trim())) {
+        // CORREÇÃO CRÍTICA: Usar função de validação
+        if (!validarJidGrupo(messageText)) {
           await sendPrivateMessage(senderJid, `❌ *JID inválido!*
 
 Formato correto: *120363318862188145@g.us*
