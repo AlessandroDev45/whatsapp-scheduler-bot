@@ -1920,6 +1920,15 @@ ${tipoEmoji} *Destinatário:* ${destinatarioDisplay}
       return resultados;
     }
 
+    // ========================================
+    // PROCESSAR /cancelar GLOBALMENTE (REMOVE 20+ DUPLICATAS)
+    // ========================================
+    if (messageText.trim().toLowerCase() === '/cancelar') {
+      await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
+      await limparSessao(sender)
+      return new Response('Agendamento cancelado', { status: 200 })
+    }
+
     switch (session.estado) {
       case 'conversando_ia':
         // IA conversacional para coletar informações
@@ -2211,13 +2220,6 @@ Digite *1* para confirmar ou *2* para cancelar`)
         break
 
       case 'perguntando_melhorar':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === 'melhorar_sim' || messageText === '1' || messageText.toLowerCase().includes('sim')) {
           // Chamar IA para melhorar a mensagem
           await sendPrivateMessage(senderJid, '🤖 *Processando com IA...*\n\nAguarde alguns segundos...')
@@ -2276,13 +2278,6 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'aprovando_mensagem':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === 'aprovar_ia' || messageText === '1' || messageText.toLowerCase().includes('aprovar')) {
           // Mensagem já está salva (melhorada) - perguntar sobre randomização
           nextState = 'perguntando_randomizar'
@@ -2335,13 +2330,6 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'editando_mensagem_manual':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         updatedSessionData.mensagem_original = messageText
         updatedSessionData.mensagem = messageText
 
@@ -2366,13 +2354,6 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'perguntando_randomizar':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         // Salvar escolha de randomização
         if (messageText === '1' || messageText.toLowerCase().includes('sim')) {
           updatedSessionData.randomizar = true
@@ -2399,13 +2380,6 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'escolhendo_destinatario':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         // Buscar destinatários no banco de dados
         await sendPrivateMessage(senderJid, '🔍 Buscando...')
 
@@ -2474,13 +2448,6 @@ Retorne APENAS a mensagem melhorada, sem explicacoes.`
         break
 
       case 'perguntando_cadastrar_grupo':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === '1') {
           // Cadastrar novo grupo
           nextState = 'cadastrando_jid_grupo_inline'
@@ -2526,13 +2493,6 @@ Digite *2* para buscar novamente`)
         break
 
       case 'cadastrando_jid_grupo_inline':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === '/voltar') {
           nextState = 'escolhendo_destinatario'
           await sendPrivateMessage(senderJid, `📋 *Digite o nome do grupo ou número do contato*
@@ -2579,13 +2539,6 @@ ${messageText}
         break
 
       case 'cadastrando_nome_grupo_inline':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === '/voltar') {
           nextState = 'cadastrando_jid_grupo_inline'
           await sendPrivateMessage(senderJid, `📝 *Digite o JID do grupo novamente:*
@@ -2637,13 +2590,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'selecionando_destinatario':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         // CORREÇÃO LÓGICA: Reestruturado para if/else if/else para tratar todas as entradas.
         const textoLimpo = messageText.toLowerCase().trim()
         const resultadosSalvos = updatedSessionData.resultados_busca || []
@@ -2724,13 +2670,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'perguntando_mais_destinatarios':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === '1' || messageText.toLowerCase().includes('sim')) {
           // Adicionar mais destinatários
           await sendPrivateMessage(senderJid,
@@ -2765,13 +2704,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'escolhendo_horario':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         // Mapear opções de botão (aceitar número ou ID)
         const horariosMap: Record<string, string> = {
           '08:00': '08:00',
@@ -2805,13 +2737,6 @@ Digite */novo* para tentar novamente.`)
 
 
       case 'aguardando_horario':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (!validarHorario(messageText)) {
             // Entrada inválida: envie o erro e mantenha o estado explicitamente
             await sendPrivateMessage(senderJid, '❌ Formato de horário inválido. Por favor, use *HH:MM* (ex: 09:30).');
@@ -2830,13 +2755,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'escolhendo_dias':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         // Se o usuário quer personalizar, mude para um novo estado
         if (messageText === 'custom_dias' || messageText === '3') {
           await sendPrivateMessage(senderJid, '📅 *Digite os dias separados por vírgula:*\n\n*Exemplo:* 1,3,5 para Seg, Qua e Sex\n\n1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb, 7=Dom\n\n⚡ _Digite /voltar para mudar o horário_\n⚡ _Digite /cancelar para sair_')
@@ -2872,13 +2790,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'aguardando_dias_custom':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === '/voltar') {
           nextState = 'escolhendo_horario'
           await sendInteractiveButtons(senderJid,
@@ -2906,13 +2817,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'escolhendo_termino':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === 'termino_nunca' || messageText === '1') {
           // Sem data de término
           updatedSessionData.data_termino = null
@@ -2933,13 +2837,6 @@ Digite */novo* para tentar novamente.`)
         break
 
       case 'aguardando_data_termino':
-        if (messageText === '/cancelar') {
-          await sendPrivateMessage(senderJid, '❌ *Agendamento cancelado!*\n\nDigite */novo* para começar novamente.')
-          await limparSessao(sender)
-          nextState = ''
-          break
-        }
-
         if (messageText === '/voltar') {
           updatedSessionData.data_termino = null
           nextState = 'aguardando_confirmacao'
