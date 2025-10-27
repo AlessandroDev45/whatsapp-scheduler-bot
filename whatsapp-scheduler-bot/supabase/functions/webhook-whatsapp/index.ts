@@ -78,7 +78,13 @@ function validarHorario(horario: string): boolean {
 
 // Verificar se usuário é admin
 function verificarPermissaoAdmin(telefone: string): boolean {
-  return telefone === ADMIN_NUMBER
+  // Extrair apenas o número do JID (remover @s.whatsapp.net ou @g.us)
+  const numeroLimpo = telefone.split('@')[0]
+  console.log(`🔍 [verificarPermissaoAdmin] Input: "${telefone}"`)
+  console.log(`🔍 [verificarPermissaoAdmin] Limpo: "${numeroLimpo}"`)
+  console.log(`🔍 [verificarPermissaoAdmin] ADMIN_NUMBER: "${ADMIN_NUMBER}"`)
+  console.log(`🔍 [verificarPermissaoAdmin] Match: ${numeroLimpo === ADMIN_NUMBER}`)
+  return numeroLimpo === ADMIN_NUMBER
 }
 
 // Limpar sessão do usuário
@@ -453,7 +459,6 @@ serve(async (req: Request) => {
 
     // 1. Buscar usuário (ativo ou inativo)
     console.log('🔍 [WEBHOOK] Buscando usuário no banco:', sender)
-    // CORREÇÃO CRÍTICA: Adicionado o campo 'role' na busca para que a verificação de admin funcione.
     let { data: user, error: userError } = await supabaseAdmin
       .from('usuarios_autorizados')
       .select('id, nome, ativo, role')
@@ -463,80 +468,19 @@ serve(async (req: Request) => {
     console.log('👤 [WEBHOOK] Usuário encontrado:', user)
     console.log('❌ [WEBHOOK] Erro ao buscar usuário:', userError)
 
-    // Se o usuário existe mas está INATIVO (aguardando aprovação)
-    if (user && !user.ativo) {
-      const msgAguardando = `⏳ *Sua solicitação ainda está aguardando aprovação do administrador.*
-
-Você receberá uma notificação assim que for aprovado.
-
-_Obrigado pela paciência!_ 🙏`
-
-      await sendPrivateMessage(senderJid, msgAguardando)
-      return new Response('Usuário aguardando aprovação', { status: 200 })
-    }
-
-    // Se o usuário não existe, criar automaticamente (aguardando aprovação)
-    if (userError || !user) {
-      console.log(`Criando novo usuário: ${sender}`)
-
-      const { data: newUser, error: createError } = await supabaseAdmin
-        .from('usuarios_autorizados')
-        .insert({
-          telefone: sender,
-          nome: body.data.pushName || 'Usuário',
-          ativo: false // Criar como INATIVO, aguardando aprovação
-        })
-        .select('id, nome')
-        .single()
-
-      if (createError || !newUser) {
-        console.error('Erro ao criar usuário:', createError)
-        return new Response('Erro ao criar usuário', { status: 500 })
-      }
-
-      // Notificar o usuário que precisa aguardar aprovação
-      const msgUsuario = `╔═══════════════════════╗
-║  ⏳ *AGUARDANDO APROVAÇÃO*
-╚═══════════════════════╝
-
-Olá, *${body.data.pushName || 'Usuário'}*! 👋
-
-Sua solicitação de acesso foi recebida e está aguardando aprovação do administrador.
-
-Você receberá uma notificação assim que for aprovado.
-
-_Obrigado pela paciência!_ 🙏`
-
-      await sendPrivateMessage(senderJid, msgUsuario)
-
-      // Notificar o ADMIN sobre novo usuário
-      const msgAdmin = `╔═══════════════════════╗
-║  🔔 *NOVO USUÁRIO*
-╚═══════════════════════╝
-
-📱 *Telefone:* ${sender}
-👤 *Nome:* ${body.data.pushName || 'Não informado'}
-
-━━━━━━━━━━━━━━━━━━━━
-
-Para aprovar, digite:
-✅ */aprovar ${sender}*
-
-Para rejeitar, digite:
-❌ */rejeitar ${sender}*`
-
-      await sendPrivateMessage(`${ADMIN_NUMBER}@s.whatsapp.net`, msgAdmin)
-
-      return new Response('Usuário criado, aguardando aprovação', { status: 200 })
-    }
-
     // ========================================
     // COMANDOS ADMINISTRATIVOS (PRIORIDADE MÁXIMA)
+    // Processar ANTES de verificar se usuário está ativo
     // ========================================
 
     // Comando /aprovar - APENAS PARA ADMIN
     if (messageText.trim().toLowerCase().startsWith('/aprovar')) {
-      if (!verificarPermissaoAdmin(sender)) {
+      console.log(`🔍 [APROVAR] Verificando permissão de admin para: ${sender}`)
+      console.log(`🔍 [APROVAR] ADMIN_NUMBER: ${ADMIN_NUMBER}`)
+      const isAdmin = verificarPermissaoAdmin(sender)
+      console.log(`🔍 [APROVAR] Resultado: ${isAdmin}`)
+
+      if (!isAdmin) {
         await sendPrivateMessage(senderJid, '❌ Apenas o administrador pode aprovar usuários.')
         return new Response('Não autorizado', { status: 403 })
       }
@@ -666,7 +610,75 @@ Se você acredita que isso é um erro, entre em contato com o administrador.`
     // FIM DOS COMANDOS ADMINISTRATIVOS
     // ========================================
 
-    // 2. Processar QUALQUER mensagem no grupo ou canal (oferecer menu)
+    // 2. Verificar se usuário está ativo ou criar novo usuário
+    // Se o usuário existe mas está INATIVO (aguardando aprovação)
+    if (user && !user.ativo) {
+      const msgAguardando = `⏳ *Sua solicitação ainda está aguardando aprovação do administrador.*
+
+Você receberá uma notificação assim que for aprovado.
+
+_Obrigado pela paciência!_ 🙏`
+
+      await sendPrivateMessage(senderJid, msgAguardando)
+      return new Response('Usuário aguardando aprovação', { status: 200 })
+    }
+
+    // Se o usuário não existe, criar automaticamente (aguardando aprovação)
+    if (userError || !user) {
+      console.log(`Criando novo usuário: ${sender}`)
+
+      const { data: newUser, error: createError } = await supabaseAdmin
+        .from('usuarios_autorizados')
+        .insert({
+          telefone: sender,
+          nome: body.data.pushName || 'Usuário',
+          ativo: false // Criar como INATIVO, aguardando aprovação
+        })
+        .select('id, nome')
+        .single()
+
+      if (createError || !newUser) {
+        console.error('Erro ao criar usuário:', createError)
+        return new Response('Erro ao criar usuário', { status: 500 })
+      }
+
+      // Notificar o usuário que precisa aguardar aprovação
+      const msgUsuario = `╔═══════════════════════╗
+║  ⏳ *AGUARDANDO APROVAÇÃO*
+╚═══════════════════════╝
+
+Olá, *${body.data.pushName || 'Usuário'}*! 👋
+
+Sua solicitação de acesso foi recebida e está aguardando aprovação do administrador.
+
+Você receberá uma notificação assim que for aprovado.
+
+_Obrigado pela paciência!_ 🙏`
+
+      await sendPrivateMessage(senderJid, msgUsuario)
+
+      // Notificar o ADMIN sobre novo usuário
+      const msgAdmin = `╔═══════════════════════╗
+║  🔔 *NOVO USUÁRIO*
+╚═══════════════════════╝
+
+📱 *Telefone:* ${sender}
+👤 *Nome:* ${body.data.pushName || 'Não informado'}
+
+━━━━━━━━━━━━━━━━━━━━
+
+Para aprovar, digite:
+✅ */aprovar ${sender}*
+
+Para rejeitar, digite:
+❌ */rejeitar ${sender}*`
+
+      await sendPrivateMessage(`${ADMIN_NUMBER}@s.whatsapp.net`, msgAdmin)
+
+      return new Response('Usuário criado, aguardando aprovação', { status: 200 })
+    }
+
+    // 3. Processar QUALQUER mensagem no grupo ou canal (oferecer menu)
     if (isGroup || isChannel) {
       // SINCRONIZAR GRUPO AUTOMATICAMENTE (NÃO-BLOQUEANTE)
       const grupoJid = body.data.key.remoteJid
