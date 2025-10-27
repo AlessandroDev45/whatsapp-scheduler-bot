@@ -1,6 +1,6 @@
 # 🚀 WhatsApp Baileys Server
 
-Servidor Node.js com Baileys para conexão direta com WhatsApp, substituindo a Evolution API.
+Servidor Node.js com Baileys para conexão direta com WhatsApp.
 
 ## 📋 Características
 

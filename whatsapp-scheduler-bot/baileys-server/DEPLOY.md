@@ -235,7 +235,6 @@ Após deploy bem-sucedido:
 1. ✅ Testar envio de mensagem
 2. ✅ Verificar scheduler funcionando
 3. ✅ Configurar GitHub Actions (CI/CD automático)
-4. ✅ Remover Evolution API do Render (não precisa mais!)
 
 ---
 

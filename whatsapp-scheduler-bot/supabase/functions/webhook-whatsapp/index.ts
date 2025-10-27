@@ -2569,7 +2569,7 @@ Digite */novo* para tentar novamente.`)
 
         } else if (textoLimpo.includes(',')) {
           // Processar múltiplos números
-          const numerosSelecionados = textoLimpo.split(',').map(n => n.trim()).filter(n => n !== '')
+          const numerosSelecionados = textoLimpo.split(',').map((n: string) => n.trim()).filter((n: string) => n !== '')
           let destinatariosSelecionados: any[] = []
 
           if (!updatedSessionData.destinatarios) updatedSessionData.destinatarios = []
@@ -2887,7 +2887,7 @@ Digite */novo* para tentar novamente.`)
             }
 
             // Criar agendamentos para cada destinatário
-            const agendamentosParaCriar = []
+            const agendamentosParaCriar: any[] = []
 
             // Calcular próximo envio
             const proximoEnvio = calcularProximoEnvio(
