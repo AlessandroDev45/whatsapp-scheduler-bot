@@ -1,4 +1,4 @@
-# Dockerfile para servidor Baileys no Fly.io
+# Dockerfile para servidor Baileys (auto-hospedado / VPS / GitHub Actions)
 FROM node:20-alpine
 
 # Instalar dependências do sistema necessárias para Baileys
@@ -23,7 +23,8 @@ RUN npm ci --only=production
 # Copiar código fonte
 COPY . .
 
-# Criar diretório para sessão WhatsApp (será montado como volume)
+# Criar diretório para sessão WhatsApp
+# Pode ser sobrescrito via variável AUTH_INFO_PATH ou volume montado em /app/auth_info
 RUN mkdir -p /app/auth_info
 
 # Expor porta
@@ -31,6 +32,7 @@ EXPOSE 3000
 
 # Variável de ambiente para produção
 ENV NODE_ENV=production
+ENV AUTH_INFO_PATH=/app/auth_info
 
 # Comando para iniciar
 CMD ["node", "src/index.js"]

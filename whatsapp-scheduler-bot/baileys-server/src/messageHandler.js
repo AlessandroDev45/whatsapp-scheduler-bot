@@ -41,6 +41,11 @@ export async function processIncomingMessage(sock, message) {
       messageText = messageContent.selectedButtonId;
     } else if (messageType === 'listResponseMessage') {
       messageText = messageContent.singleSelectReply.selectedRowId;
+    } else if (messageType === 'imageMessage' || messageType === 'videoMessage' || messageType === 'documentMessage' || messageType === 'audioMessage') {
+      // Extrair legenda/caption de mídia — permite que comandos enviados com foto sejam processados
+      messageText = messageContent.caption || '';
+    } else if (messageType === 'templateButtonReplyMessage') {
+      messageText = messageContent.selectedId || messageContent.selectedDisplayText || '';
     }
 
     console.log(`📝 [MESSAGE_HANDLER] Texto extraído: "${messageText}"`);

@@ -15,10 +15,12 @@ let qrCodeData = null;
 const logger = pino({ level: 'silent' }); // Silenciar logs do Baileys
 
 export async function initWhatsApp() {
+  // AUTH_INFO_PATH pode ser definido em .env para flexibilidade local ou em containers
+  const authInfoPath = process.env.AUTH_INFO_PATH || './auth_info';
   console.log('🔧 [WhatsApp] Iniciando conexão...');
-  console.log('🔧 [WhatsApp] Carregando auth state de /app/auth_info');
+  console.log(`🔧 [WhatsApp] Carregando auth state de ${authInfoPath}`);
 
-  const { state, saveCreds } = await useMultiFileAuthState('/app/auth_info');
+  const { state, saveCreds } = await useMultiFileAuthState(authInfoPath);
 
   console.log('🔧 [WhatsApp] Auth state carregado. Buscando versão do Baileys...');
   const { version } = await fetchLatestBaileysVersion();
@@ -177,7 +179,7 @@ export async function resetConnection() {
   try {
     const fs = await import('fs');
     const path = await import('path');
-    const authPath = '/app/auth_info';
+    const authPath = process.env.AUTH_INFO_PATH || './auth_info';
 
     if (fs.existsSync(authPath)) {
       const files = fs.readdirSync(authPath);

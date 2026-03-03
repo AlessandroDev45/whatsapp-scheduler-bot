@@ -1,246 +1,125 @@
-# 🚀 GUIA DE DEPLOY - PASSO A PASSO
+# 🚀 DEPLOY — GitHub Actions (grátis, 24/7)
 
-## ✅ PRÉ-REQUISITOS
+O bot roda **dentro do GitHub Actions** como workflow agendado. Sem servidor externo, sem custo.
 
-- [x] Conta no Fly.io criada
-- [x] Fly CLI instalado
-- [x] Login feito (`flyctl auth login`)
+**Como funciona:**
+- GitHub executa o bot a cada 5 horas (limite de 6h por job)
+- A sessão WhatsApp fica salva no **GitHub Actions Cache** — não precisa escanear QR Code toda vez
+- O scheduler continua funcionando normalmente dentro do job
 
 ---
 
-## 📝 PASSO 1: NAVEGAR PARA A PASTA
+## PASSO 1 — Colocar o código no GitHub
+
+Se ainda não tem o repositório criado:
+
+1. Acesse [github.com/new](https://github.com/new) e crie um repositório (ex: `whatsmatic`)
+2. Na pasta do projeto, rode:
 
 ```bash
-cd whatsapp-scheduler-bot/baileys-server
+git init
+git add .
+git commit -m "primeiro commit"
+git branch -M main
+git remote add origin https://github.com/SEU_USUARIO/whatsmatic.git
+git push -u origin main
 ```
 
 ---
 
-## 📝 PASSO 2: CRIAR APP NO FLY.IO
+## PASSO 2 — Configurar os Secrets
 
-```bash
-flyctl launch --no-deploy
-```
+No repositório GitHub: **Settings → Secrets and variables → Actions → New repository secret**
 
-**O que vai acontecer:**
-- Fly.io vai detectar o Dockerfile
-- Vai perguntar o nome do app (pode aceitar o sugerido ou escolher outro)
-- Vai perguntar a região (escolha `gru` - São Paulo)
-- Vai perguntar se quer criar banco de dados (responda **NÃO**, já temos Supabase)
+Adicione cada um destes secrets:
 
-**Exemplo de respostas:**
-```
-? Choose an app name (leave blank to generate one): whatsapp-baileys-bot
-? Choose a region for deployment: São Paulo, Brazil (gru)
-? Would you like to set up a Postgresql database now? No
-? Would you like to set up an Upstash Redis database now? No
-? Would you like to deploy now? No
-```
+| Secret | Onde pegar |
+|---|---|
+| `SUPABASE_URL` | `https://aiwwocigvktmtiawslrx.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | Supabase → Project Settings → API → service_role key |
+| `SUPABASE_WEBHOOK_URL` | `https://aiwwocigvktmtiawslrx.supabase.co/functions/v1/webhook-whatsapp` |
+| `MISTRAL_API_KEY` | Sua chave da Mistral AI |
+| `BOT_INSTANCE_NAME` | `whatsapp_bot` |
 
 ---
 
-## 📝 PASSO 3: CRIAR VOLUME PARA SESSÃO WHATSAPP
+## PASSO 3 — Ativar o workflow
 
-```bash
-flyctl volumes create whatsapp_auth --region gru --size 1
-```
-
-**O que é isso:**
-- Volume persistente de 1GB
-- Armazena a sessão do WhatsApp
-- Mesmo se o app reiniciar, a sessão permanece
-- **Não precisa escanear QR code toda hora!**
+1. Vá em **Actions** no repositório
+2. Clique em **"🤖 Run WhatsApp Bot"**
+3. Clique em **"Run workflow"** → **"Run workflow"** (botão verde)
+4. O job vai iniciar em segundos
 
 ---
 
-## 📝 PASSO 4: CONFIGURAR VARIÁVEIS DE AMBIENTE
+## PASSO 4 — Escanear o QR Code (apenas na primeira vez)
 
-```bash
-# Supabase URL
-flyctl secrets set SUPABASE_URL="https://aiwwocigvktmtiawslrx.supabase.co"
+1. Abra o job em execução em **Actions → Run WhatsApp Bot → run-bot**
+2. Expanda o step **"Iniciar bot WhatsApp"**
+3. Aguarde o QR Code aparecer nos logs
+4. Abra o WhatsApp → **Dispositivos Conectados → Conectar dispositivo**
+5. Escaneie o QR Code
 
-# Supabase Service Key (pegar do Supabase Dashboard > Settings > API)
-flyctl secrets set SUPABASE_SERVICE_KEY="sua_service_role_key_aqui"
-
-# URL do webhook (Edge Function)
-flyctl secrets set SUPABASE_WEBHOOK_URL="https://aiwwocigvktmtiawslrx.supabase.co/functions/v1/webhook-whatsapp"
-
-# Nome da instância
-flyctl secrets set BOT_INSTANCE_NAME="whatsapp_bot"
+Após escanear, nos logs vai aparecer:
+```
+✅ WhatsApp conectado com sucesso!
 ```
 
-**IMPORTANTE:** Substitua `sua_service_role_key_aqui` pela sua chave real do Supabase!
+A sessão fica salva no cache. **Nas próximas execuções não precisa escanear.**
 
 ---
 
-## 📝 PASSO 5: FAZER DEPLOY
+## Como o bot reinicia automaticamente
 
-```bash
-flyctl deploy
+O workflow está configurado para rodar a cada 5 horas via `cron`:
+
+```yaml
+schedule:
+  - cron: '0 */5 * * *'
 ```
 
-**O que vai acontecer:**
-- Fly.io vai buildar a imagem Docker
-- Vai fazer upload
-- Vai iniciar o app
-- Pode demorar 2-3 minutos
+Quando um job termina (por timeout de 5h30), o próximo já está agendado para iniciar. O bot fica rodando 24/7 sem intervenção manual.
 
 ---
 
-## 📝 PASSO 6: VER LOGS E ESCANEAR QR CODE
+## Comandos úteis
 
-```bash
-flyctl logs
-```
-
-**O que procurar:**
-- Mensagem: "📱 QR CODE GERADO!"
-- Um QR code vai aparecer no terminal
-- **Escaneie com seu WhatsApp** (Dispositivos Conectados)
-
-**Após escanear:**
-- Vai aparecer: "✅ WhatsApp conectado com sucesso!"
-- A sessão fica salva no volume
-- **Nunca mais precisa escanear!** (a menos que você deslogue manualmente)
-
----
-
-## 📝 PASSO 7: VERIFICAR SE ESTÁ FUNCIONANDO
-
-```bash
-# Ver status
-flyctl status
-
-# Ver URL do app
-flyctl info
-
-# Testar health check
-curl https://seu-app.fly.dev/health
-```
-
-**Resposta esperada:**
-```json
-{
-  "status": "ok",
-  "whatsapp": "connected",
-  "uptime": 123.45,
-  "timestamp": "2025-10-25T..."
-}
-```
-
----
-
-## 🎯 PRONTO! SISTEMA FUNCIONANDO 24/7
-
-Agora seu bot está:
-- ✅ Rodando 24/7 no Fly.io
-- ✅ Conectado no WhatsApp
-- ✅ Processando mensagens
-- ✅ Executando agendamentos
-- ✅ **Sem hibernar!**
-- ✅ **Sem perder sessão!**
-
----
-
-## 🔧 COMANDOS ÚTEIS
+### Iniciar manualmente
+GitHub → **Actions → 🤖 Run WhatsApp Bot → Run workflow**
 
 ### Ver logs em tempo real
-```bash
-flyctl logs
-```
+GitHub → **Actions → Run WhatsApp Bot** → clique no job em execução → step "Iniciar bot WhatsApp"
 
-### Ver status
-```bash
-flyctl status
-```
+### Parar o bot
+GitHub → **Actions → Run WhatsApp Bot** → clique no job → **Cancel workflow**
 
-### Reiniciar app
-```bash
-flyctl apps restart
-```
-
-### Acessar console da VM
-```bash
-flyctl ssh console
-```
-
-### Ver métricas
-```bash
-flyctl metrics
-```
-
-### Ver volumes
-```bash
-flyctl volumes list
-```
+### Forçar novo QR Code (reconectar)
+1. Cancele o job em execução
+2. Exclua o cache: **Actions → Caches** → delete `whatsapp-auth-session`
+3. Rode o workflow novamente e escaneie o novo QR Code
 
 ---
 
-## 🐛 TROUBLESHOOTING
+## Limites do plano grátis do GitHub
 
-### QR Code não aparece
-```bash
-# Reiniciar app
-flyctl apps restart
+| Recurso | Limite grátis |
+|---|---|
+| Minutos/mês | 2.000 min (repositório público: **ilimitado**) |
+| Armazenamento de cache | 10 GB |
+| Duração máxima de um job | 6 horas |
 
-# Ver logs
-flyctl logs
-```
-
-### App não inicia
-```bash
-# Ver logs de erro
-flyctl logs
-
-# Verificar secrets
-flyctl secrets list
-```
-
-### Sessão perdida
-```bash
-# Verificar se volume está montado
-flyctl volumes list
-
-# Se necessário, deletar e recriar
-flyctl volumes destroy whatsapp_auth
-flyctl volumes create whatsapp_auth --region gru --size 1
-flyctl deploy
-```
+> 💡 **Recomendação:** Deixe o repositório **público** para ter minutos ilimitados.
+> Se preferir privado, 2.000 min/mês = ~33h — insuficiente para 24/7. Nesse caso use Docker local ou uma VPS.
 
 ---
 
-## 📊 MONITORAMENTO
+## Alternativa: Docker local
 
-### Dashboard do Fly.io
-```
-https://fly.io/dashboard
-```
+Se preferir rodar na sua máquina com Docker:
 
-### Logs em tempo real
 ```bash
-flyctl logs
+cp .env.example .env   # preencher com as credenciais
+docker compose up -d
+docker compose logs -f   # ver QR Code na primeira vez
 ```
-
-### Métricas
-```bash
-flyctl metrics
-```
-
----
-
-## 🎉 PRÓXIMOS PASSOS
-
-Após deploy bem-sucedido:
-
-1. ✅ Testar envio de mensagem
-2. ✅ Verificar scheduler funcionando
-3. ✅ Configurar GitHub Actions (CI/CD automático)
-
----
-
-## ❓ DÚVIDAS?
-
-- Documentação Fly.io: https://fly.io/docs/
-- Documentação Baileys: https://github.com/WhiskeySockets/Baileys
-- Suporte: Abrir issue no GitHub
 

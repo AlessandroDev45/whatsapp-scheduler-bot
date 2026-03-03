@@ -1,0 +1,79 @@
+name: Build & Publish Docker Image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'whatsapp-scheduler-bot/baileys-server/**'
+  workflow_dispatch:   # Permite rodar manualmente pelo GitHub
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/whatsapp-scheduler-bot
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extrair metadata (tag, label)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build e push da imagem Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: ./whatsapp-scheduler-bot/baileys-server
+          file: ./whatsapp-scheduler-bot/baileys-server/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB OPCIONAL: Deploy automático via SSH em VPS próprio
+  # Para ativar: configure os secrets DEPLOY_HOST, DEPLOY_USER
+  # e DEPLOY_KEY no repositório (Settings → Secrets → Actions)
+  # ─────────────────────────────────────────────────────────────
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}   # Só roda se DEPLOY_ENABLED=true nas Variables do repo
+    environment: production
+
+    steps:
+      - name: Deploy via SSH no servidor
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            cd ~/whatsapp-scheduler-bot/baileys-server
+
+            # Baixar imagem mais recente
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker pull ghcr.io/${{ github.repository_owner }}/whatsapp-scheduler-bot:latest
+
+            # Reiniciar apenas o container (preserva volume da sessão WhatsApp)
+            docker compose pull
+            docker compose up -d --no-deps whatsapp-bot
+
+            echo "✅ Deploy concluído!"

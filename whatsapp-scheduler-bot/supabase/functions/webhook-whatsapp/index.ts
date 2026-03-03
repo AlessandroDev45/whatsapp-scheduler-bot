@@ -15,9 +15,13 @@ const MISTRAL_MODEL = Deno.env.get('MISTRAL_MODEL') || 'devstral-small-2505'
 const ADMIN_NUMBER = Deno.env.get('ADMIN_NUMBER')
 
 // Validar variáveis de ambiente obrigatórias
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !BAILEYS_API_URL || !MISTRAL_API_KEY || !ADMIN_NUMBER) {
-  throw new Error('Variáveis de ambiente obrigatórias não configuradas: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BAILEYS_API_URL, MISTRAL_API_KEY, ADMIN_NUMBER')
-}
+// CORREÇÃO: Usar console.error em vez de throw para não derrubar a função inteira.
+// Um throw a nível de módulo causa HTTP 500 em TODOS os requests sem nenhum log útil.
+if (!SUPABASE_URL) console.error('❌ [CONFIG] SUPABASE_URL não configurada')
+if (!SUPABASE_SERVICE_ROLE_KEY) console.error('❌ [CONFIG] SUPABASE_SERVICE_ROLE_KEY não configurada')
+if (!BAILEYS_API_URL) console.error('❌ [CONFIG] BAILEYS_API_URL não configurada')
+if (!MISTRAL_API_KEY) console.error('❌ [CONFIG] MISTRAL_API_KEY não configurada')
+if (!ADMIN_NUMBER) console.error('❌ [CONFIG] ADMIN_NUMBER não configurada')
 
 // Cliente Supabase com permissões de administrador
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)

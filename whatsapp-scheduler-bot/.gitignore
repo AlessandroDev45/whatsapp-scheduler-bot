@@ -2,6 +2,10 @@
 node_modules/
 package-lock.json
 
+# Sessão WhatsApp (nunca commitar — salva no GitHub Actions Cache)
+baileys-server/auth_info/
+auth_info/
+
 # Variáveis de ambiente
 .env
 .env.local

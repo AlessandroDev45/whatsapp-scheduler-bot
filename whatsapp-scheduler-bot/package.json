@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-scheduler-bot",
   "version": "2.0.0",
-  "description": "Bot para agendamento de mensagens no WhatsApp (Baileys + Fly.io)",
+  "description": "Bot para agendamento de mensagens no WhatsApp (Baileys + Docker + Supabase)",
   "type": "module",
   "scripts": {
     "test:criar": "node criar-teste.js",

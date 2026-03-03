@@ -1,212 +1,70 @@
-# 🚀 WhatsApp Baileys Server
+# 📱 WhatsApp Scheduler Bot — Servidor Baileys
 
-Servidor Node.js com Baileys para conexão direta com WhatsApp.
-
-## 📋 Características
-
-- ✅ Conexão direta com WhatsApp via Baileys
-- ✅ Sessão persistente (não precisa escanear QR toda hora)
-- ✅ Scheduler integrado para agendamentos
-- ✅ API REST para envio de mensagens
-- ✅ Integração com Supabase
-- ✅ Deploy no Fly.io (grátis, 24/7, não hiberna)
+Servidor Node.js que mantém a conexão com o WhatsApp via **Baileys** e executa os agendamentos de mensagens configurados no Supabase.
 
 ## 🏗️ Arquitetura
 
 ```
-┌─────────────────────────────────────────┐
-│  FLY.IO (Este servidor)                │
-│  ├─ Baileys (WhatsApp)                 │
-│  ├─ Scheduler (agendamentos)           │
-│  └─ API REST (envios)                  │
-└─────────────────────────────────────────┘
-              ↕️
-┌─────────────────────────────────────────┐
-│  SUPABASE                               │
-│  ├─ PostgreSQL (dados)                 │
-│  ├─ Edge Functions (lógica)            │
-│  └─ Storage (backup)                   │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  SUPABASE                                   │
+│  - Banco de dados (agendamentos/histórico)  │
+│  - Edge Function (processa mensagens)       │
+└────────────────┬────────────────────────────┘
+                 │ webhook / queries
+┌────────────────▼────────────────────────────┐
+│  ESTE SERVIDOR (Docker)                     │
+│  - Conexão persistente com WhatsApp         │
+│  - Scheduler (verifica a cada minuto)       │
+│  - API REST na porta 3000                   │
+└─────────────────────────────────────────────┘
 ```
 
-## 🚀 Deploy no Fly.io
+## 🚀 Como rodar
 
-### 1. Instalar Fly CLI
-
-```powershell
-# Windows PowerShell
-powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
-```
-
-### 2. Login no Fly.io
+### 1. Configure as variáveis de ambiente
 
 ```bash
-flyctl auth login
-```
-
-### 3. Criar app e volume
-
-```bash
-# Navegar para a pasta do servidor
-cd baileys-server
-
-# Criar app
-flyctl launch --no-deploy
-
-# Criar volume para sessão WhatsApp
-flyctl volumes create whatsapp_auth --size 1
-```
-
-### 4. Configurar variáveis de ambiente
-
-```bash
-flyctl secrets set SUPABASE_URL="https://seu-projeto.supabase.co"
-flyctl secrets set SUPABASE_SERVICE_KEY="seu_service_role_key"
-flyctl secrets set SUPABASE_WEBHOOK_URL="https://seu-projeto.supabase.co/functions/v1/webhook-whatsapp"
-flyctl secrets set BOT_INSTANCE_NAME="whatsapp_bot"
-```
-
-### 5. Deploy
-
-```bash
-flyctl deploy
-```
-
-### 6. Conectar WhatsApp (escanear QR code)
-
-```bash
-# Ver logs em tempo real
-flyctl logs
-
-# Quando aparecer o QR code, escanear com WhatsApp
-# Após conectar, a sessão fica salva no volume (não precisa escanear novamente)
-```
-
-## 📡 Endpoints da API
-
-### Health Check
-```bash
-GET /health
-```
-
-### Enviar Mensagem
-```bash
-POST /api/send-message
-Content-Type: application/json
-
-{
-  "jid": "5531999999999@s.whatsapp.net",
-  "text": "Olá, mundo!"
-}
-```
-
-### Enviar Mensagem com Botões
-```bash
-POST /api/send-buttons
-Content-Type: application/json
-
-{
-  "jid": "5531999999999@s.whatsapp.net",
-  "text": "Escolha uma opção:",
-  "buttons": [
-    { "id": "1", "text": "Opção 1" },
-    { "id": "2", "text": "Opção 2" }
-  ]
-}
-```
-
-### Ver Status
-```bash
-GET /api/status
-```
-
-### Ver QR Code
-```bash
-GET /api/qrcode
-```
-
-## 🔧 Comandos Úteis
-
-```bash
-# Ver logs
-flyctl logs
-
-# Ver status
-flyctl status
-
-# Acessar console da VM
-flyctl ssh console
-
-# Reiniciar app
-flyctl apps restart
-
-# Ver métricas
-flyctl metrics
-
-# Escalar (aumentar recursos)
-flyctl scale memory 512  # Aumentar para 512MB (ainda grátis)
-```
-
-## 🐛 Troubleshooting
-
-### QR Code não aparece
-```bash
-# Ver logs em tempo real
-flyctl logs
-
-# Se necessário, reiniciar
-flyctl apps restart
-```
-
-### Sessão perdida
-```bash
-# Verificar se o volume está montado
-flyctl volumes list
-
-# Se necessário, criar novo volume
-flyctl volumes create whatsapp_auth --size 1
-```
-
-### App não responde
-```bash
-# Ver status
-flyctl status
-
-# Ver logs
-flyctl logs
-
-# Reiniciar
-flyctl apps restart
-```
-
-## 📝 Desenvolvimento Local
-
-```bash
-# Instalar dependências
-npm install
-
-# Copiar .env.example para .env
 cp .env.example .env
-
-# Editar .env com suas credenciais
-nano .env
-
-# Rodar em modo desenvolvimento
-npm run dev
+# Edite o .env com suas credenciais
 ```
 
-## 🎯 Próximos Passos
+### 2. Suba com Docker Compose
 
-Após deploy bem-sucedido:
+```bash
+docker compose up -d
+docker compose logs -f   # ver logs e QR Code
+```
 
-1. ✅ Escanear QR code (apenas 1x)
-2. ✅ Verificar conexão: `flyctl logs`
-3. ✅ Testar envio de mensagem
-4. ✅ Configurar GitHub Actions para CI/CD automático
+### 3. Escaneie o QR Code
 
-## 📚 Documentação
+Abra o **WhatsApp → Dispositivos Conectados → Conectar dispositivo** e escaneie o QR Code que aparecer nos logs. A sessão fica salva permanentemente.
 
-- [Baileys](https://github.com/WhiskeySockets/Baileys)
-- [Fly.io](https://fly.io/docs/)
-- [Supabase](https://supabase.com/docs)
+---
 
+## 📋 Variáveis de ambiente
+
+| Variável | Descrição |
+|---|---|
+| `SUPABASE_URL` | URL do projeto Supabase |
+| `SUPABASE_SERVICE_KEY` | Service role key do Supabase |
+| `SUPABASE_WEBHOOK_URL` | URL da Edge Function |
+| `MISTRAL_API_KEY` | Chave da API Mistral AI |
+| `BOT_INSTANCE_NAME` | Nome da instância (padrão: `whatsapp_bot`) |
+| `PORT` | Porta do servidor (padrão: `3000`) |
+| `AUTH_INFO_PATH` | Caminho da sessão WhatsApp (padrão: `./auth_info`) |
+
+---
+
+## 🔧 Comandos Docker
+
+```bash
+docker compose up -d          # Iniciar
+docker compose logs -f        # Ver logs
+docker compose restart        # Reiniciar
+docker compose down           # Parar
+docker compose down -v        # Parar + apagar sessão WhatsApp
+```
+
+---
+
+Ver [DEPLOY.md](DEPLOY.md) para instruções completas de deploy em servidor.

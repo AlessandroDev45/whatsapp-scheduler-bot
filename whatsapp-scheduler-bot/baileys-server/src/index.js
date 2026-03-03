@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 
-// Health check (para Fly.io monitorar)
+// Health check (para monitoramento do container)
 app.get('/health', (req, res) => {
   const sock = getWhatsAppClient();
   const isConnected = sock !== null;

@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
-import { sendMessage } from './whatsapp.js';
+import { sendMessage, getWhatsAppClient } from './whatsapp.js';
 
 config();
 
@@ -73,25 +73,24 @@ function calcularProximoEnvio(horaEnvio, diasSemana) {
     // Obter hora atual em UTC
     const agoraUTC = new Date();
 
-    // Converter para string no formato do banco (YYYY-MM-DD HH:MM:SS) em timezone SP
-    const agoraString = agoraUTC.toLocaleString('sv-SE', { timeZone: 'America/Sao_Paulo' });
-
-    // Criar Date object a partir da string SP (para comparações)
-    const agoraSP = new Date(agoraString.replace(' ', 'T'));
+    // CORREÇÃO: Usar offset explícito para converter UTC → Brasília (UTC-3)
+    // Isso evita que new Date(string) seja interpretado como UTC em vez de BRT
+    const OFFSET_BRT_MS = -3 * 60 * 60 * 1000; // -3 horas em ms
+    const agoraBRT = new Date(agoraUTC.getTime() + OFFSET_BRT_MS);
 
     const [horas, minutos, segundos = 0] = horaEnvio.split(':').map(Number);
 
     console.log(`   Parsed: ${horas}:${minutos}:${segundos}`);
 
-    // Criar próximo envio em SP
-    let proximoEnvio = new Date(agoraSP);
+    // Criar próximo envio no horário de Brasília
+    let proximoEnvio = new Date(agoraBRT);
     proximoEnvio.setHours(horas, minutos, segundos, 0);
 
-    console.log(`   Próximo envio inicial: ${proximoEnvio.toISOString()}`);
-    console.log(`   Agora SP: ${agoraSP.toISOString()}`);
+    console.log(`   Próximo envio inicial (BRT): ${proximoEnvio.toISOString()}`);
+    console.log(`   Agora BRT: ${agoraBRT.toISOString()}`);
 
-    // Se já passou do horário em SP, agendar para amanhã
-    if (proximoEnvio <= agoraSP) {
+    // Se já passou do horário em BRT, agendar para amanhã
+    if (proximoEnvio <= agoraBRT) {
       console.log(`   ⏭️ Horário já passou, agendando para amanhã`);
       proximoEnvio.setDate(proximoEnvio.getDate() + 1);
     }
@@ -99,10 +98,10 @@ function calcularProximoEnvio(horaEnvio, diasSemana) {
     // Se dias_semana for null ou vazio, retorna o próximo envio calculado
     if (!diasSemana || diasSemana.length === 0) {
       console.log(`   ✅ Sem restrição de dias da semana`);
-      // Converter para UTC para armazenar no banco
-      const resultado = proximoEnvio.toISOString();
-      console.log(`   📅 Resultado: ${resultado}`);
-      return new Date(resultado);
+      // CORREÇÃO: Converter BRT → UTC antes de armazenar no banco
+      const resultadoUTC = new Date(proximoEnvio.getTime() - OFFSET_BRT_MS);
+      console.log(`   📅 Resultado (UTC): ${resultadoUTC.toISOString()}`);
+      return resultadoUTC;
     }
 
     // Verificar dias da semana
@@ -119,10 +118,10 @@ function calcularProximoEnvio(horaEnvio, diasSemana) {
       // Comparar como número (diasSemana pode ser array de números ou strings)
       if (diasSemana.includes(diaDaSemanaNosso) || diasSemana.includes(diaDaSemanaNosso.toString())) {
         console.log(`   ✅ Dia encontrado!`);
-        // Converter para UTC para armazenar no banco
-        const resultado = proximoEnvio.toISOString();
-        console.log(`   📅 Resultado: ${resultado}`);
-        return new Date(resultado);
+        // CORREÇÃO: Converter BRT → UTC antes de armazenar no banco
+        const resultadoUTC = new Date(proximoEnvio.getTime() - OFFSET_BRT_MS);
+        console.log(`   📅 Resultado (UTC): ${resultadoUTC.toISOString()}`);
+        return resultadoUTC;
       }
       proximoEnvio.setDate(proximoEnvio.getDate() + 1);
       contador++;
@@ -138,6 +137,15 @@ function calcularProximoEnvio(horaEnvio, diasSemana) {
 
 async function processarAgendamentos() {
   try {
+    // ========================================
+    // VERIFICAÇÃO 1: WhatsApp está conectado?
+    // ========================================
+    const sock = getWhatsAppClient();
+    if (!sock) {
+      console.log('⚠️ WhatsApp não está conectado. Pulando verificação de agendamentos.');
+      return;
+    }
+
     // Obter hora atual em UTC
     const agoraUTC = new Date();
     const agoraUTCString = agoraUTC.toISOString();
@@ -145,12 +153,8 @@ async function processarAgendamentos() {
     // Converter para string no formato do banco (YYYY-MM-DD HH:MM:SS) em timezone SP
     const agoraString = agoraUTC.toLocaleString('sv-SE', { timeZone: 'America/Sao_Paulo' });
 
-    // Criar Date object a partir da string SP (para comparações)
-    const agoraSP = new Date(agoraString.replace(' ', 'T'));
-
     console.log(`🕐 Hora atual (UTC): ${agoraUTCString}`);
     console.log(`🕐 Hora atual (SP): ${agoraUTC.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
-    console.log(`🕐 Hora atual (banco): ${agoraString}`);
 
     // Buscar agendamentos que precisam ser enviados (comparando UTC com UTC)
     const { data: agendamentos, error } = await supabase
@@ -162,24 +166,7 @@ async function processarAgendamentos() {
 
     if (error) {
       console.error('❌ Erro ao buscar agendamentos:', error);
-      console.error('Erro detalhado:', JSON.stringify(error, null, 2));
       return;
-    }
-
-    // DEBUG: Buscar TODOS os agendamentos ativos para comparar
-    const { data: todosAgendamentos } = await supabase
-      .from('agendamentos')
-      .select('id,proximo_envio,hora_envio,ativo')
-      .eq('ativo', true);
-
-    if (todosAgendamentos && todosAgendamentos.length > 0) {
-      console.log(`📊 Total de agendamentos ativos: ${todosAgendamentos.length}`);
-      todosAgendamentos.forEach(a => {
-        const proximoEnvioUTC = new Date(a.proximo_envio);
-        const diff = proximoEnvioUTC - agoraSP;
-        const minutos = Math.floor(diff / 60000);
-        console.log(`   - ID: ${a.id.substring(0, 8)}... | Próximo: ${a.proximo_envio} | Diff: ${minutos} min`);
-      });
     }
 
     if (!agendamentos || agendamentos.length === 0) {
@@ -188,26 +175,64 @@ async function processarAgendamentos() {
     }
     
     console.log(`✅ Encontrados ${agendamentos.length} agendamentos para processar.`);
+
+    // ========================================
+    // PROTEÇÃO: Avançar agendamentos com proximo_envio muito antigo
+    // Se proximo_envio está mais de 30 minutos no passado, avançar
+    // para o próximo horário válido sem tentar enviar.
+    // Isso previne loop infinito de retentativas quando WhatsApp
+    // ficou desconectado por horas/dias.
+    // ========================================
+    const LIMITE_ATRASO_MS = 30 * 60 * 1000; // 30 minutos
     
     for (const agendamento of agendamentos) {
       try {
+        const proximoEnvioDate = new Date(agendamento.proximo_envio);
+        const atrasoMs = agoraUTC - proximoEnvioDate;
+
+        // Se o agendamento está mais de 30 min atrasado, avançar sem enviar
+        if (atrasoMs > LIMITE_ATRASO_MS) {
+          console.log(`\n⏭️ Agendamento ${agendamento.id.substring(0, 8)}... está ${Math.floor(atrasoMs / 60000)} min atrasado. Avançando para próximo horário.`);
+          
+          const proximoEnvio = calcularProximoEnvio(
+            agendamento.hora_envio,
+            agendamento.dias_semana
+          );
+
+          if (proximoEnvio) {
+            const proximoEnvioISO = proximoEnvio.toISOString();
+            await supabase
+              .from('agendamentos')
+              .update({ proximo_envio: proximoEnvioISO })
+              .eq('id', agendamento.id);
+            console.log(`   ⏰ Próximo envio atualizado para: ${proximoEnvio.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
+          }
+          continue; // Não tenta enviar, pula para o próximo
+        }
+
         console.log(`\n📤 Processando agendamento ${agendamento.id}...`);
-        console.log(`   Destinatário: ${agendamento.destinatario_nome}`);
+        console.log(`   Destinatário: ${agendamento.destinatario_nome || agendamento.destinatario_id}`);
         console.log(`   Mensagem original: ${agendamento.mensagem.substring(0, 50)}...`);
         console.log(`   Randomizar: ${agendamento.randomizar ? 'SIM' : 'NÃO'}`);
 
         // ========================================
         // PROTEÇÃO: Verificar se já foi enviado HOJE
         // ========================================
-        const hoje = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        // CORREÇÃO: Usar data de hoje em BRT (UTC-3), não UTC, para evitar
+        // que a guarda falhe entre 21h-00h BRT quando a data UTC já virou.
+        const OFFSET_BRT_MS_CHECK = -3 * 60 * 60 * 1000;
+        const hojeBRT = new Date(new Date().getTime() + OFFSET_BRT_MS_CHECK).toISOString().split('T')[0]; // YYYY-MM-DD em BRT
+        // Converter início/fim do dia BRT para UTC para comparar com campo UTC no banco
+        const inicioDiaBRTEmUTC = new Date(`${hojeBRT}T00:00:00${'-03:00'}`).toISOString();
+        const fimDiaBRTEmUTC    = new Date(`${hojeBRT}T23:59:59${'-03:00'}`).toISOString();
 
         const { data: enviosHoje, error: erroHistorico } = await supabase
           .from('historico_envios')
           .select('id, enviado_em')
           .eq('agendamento_id', agendamento.id)
           .eq('status', 'enviado')
-          .gte('enviado_em', `${hoje}T00:00:00Z`)
-          .lte('enviado_em', `${hoje}T23:59:59Z`);
+          .gte('enviado_em', inicioDiaBRTEmUTC)
+          .lte('enviado_em', fimDiaBRTEmUTC);
 
         if (erroHistorico) {
           console.error('❌ Erro ao verificar histórico:', erroHistorico);
@@ -237,8 +262,13 @@ async function processarAgendamentos() {
         console.log(`✅ Verificação OK: Nenhum envio hoje para este agendamento`);
 
         // ========================================
-        // FIM DA PROTEÇÃO
+        // Re-verificar conexão antes de enviar
         // ========================================
+        const sockAtual = getWhatsAppClient();
+        if (!sockAtual) {
+          console.log('⚠️ WhatsApp desconectou durante o processamento. Abortando.');
+          return;
+        }
 
         // Determinar mensagem final
         let mensagemFinal = agendamento.mensagem;
@@ -285,15 +315,39 @@ async function processarAgendamentos() {
         }
         
       } catch (error) {
-        console.error(`❌ Erro ao processar agendamento ${agendamento.id}:`, error);
+        console.error(`❌ Erro ao processar agendamento ${agendamento.id}:`, error.message);
         
-        // Registrar erro no histórico
+        // ========================================
+        // CORREÇÃO: Avançar proximo_envio mesmo em caso de erro
+        // para evitar loop infinito de retentativas a cada minuto
+        // ========================================
+        const proximoEnvio = calcularProximoEnvio(
+          agendamento.hora_envio,
+          agendamento.dias_semana
+        );
+
+        if (proximoEnvio) {
+          const proximoEnvioISO = proximoEnvio.toISOString();
+          await supabase
+            .from('agendamentos')
+            .update({ proximo_envio: proximoEnvioISO })
+            .eq('id', agendamento.id);
+          console.log(`   ⏰ Avançando próximo envio para evitar loop: ${proximoEnvioISO}`);
+        }
+
+        // Registrar erro no histórico (sem inundar - apenas 1 registro por falha)
         await supabase.from('historico_envios').insert({
           agendamento_id: agendamento.id,
           status: 'erro',
           mensagem_id: null,
           erro: error.message
         });
+
+        // Se erro é de conexão, abortar todos os demais agendamentos
+        if (error.message === 'Connection Closed' || error.message === 'WhatsApp não está conectado') {
+          console.log('🔌 Conexão perdida. Abortando processamento dos demais agendamentos.');
+          return;
+        }
       }
     }
     

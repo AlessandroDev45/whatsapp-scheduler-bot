@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  whatsapp-bot:
+    build: .
+    image: whatsapp-scheduler-bot:latest
+    container_name: whatsapp-scheduler-bot
+    restart: unless-stopped        # Reinicia automaticamente se cair
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env                       # Crie o .env a partir do .env.example
+    environment:
+      - NODE_ENV=production
+      - AUTH_INFO_PATH=/app/auth_info
+    volumes:
+      - whatsapp_auth:/app/auth_info   # Sessão persistente — não perde login ao reiniciar
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  whatsapp_auth:
+    driver: local
