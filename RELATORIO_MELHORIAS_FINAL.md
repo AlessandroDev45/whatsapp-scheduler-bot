@@ -4,7 +4,12 @@
 **Arquivo:** `whatsapp-scheduler-bot/supabase/functions/webhook-whatsapp/index.ts`  
 **Total de linhas:** 3.377 linhas
 
----
+
+***O código roda 100% fora do PC:
+
+GitHub Actions executa o bot no servidor do GitHub (Ubuntu runner)
+Supabase mantém o banco de dados e a Edge Function sempre ativos
+Cloudflare Tunnel é criado automaticamente a cada run pelo próprio workflow***
 
 ## ✅ RESUMO EXECUTIVO
 
