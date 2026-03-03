@@ -1,7 +1,7 @@
 name: 🤖 Run WhatsApp Bot
 
 on:
-  # Reinicia automaticamente a cada 5h30 (job dura até 6h no GitHub Actions)
+  # Reinicia automaticamente a cada 5h (job dura até 6h no GitHub Actions)
   schedule:
     - cron: '0 */5 * * *'
 
@@ -30,8 +30,6 @@ jobs:
         run: npm ci --only=production
 
       # ── 4. Restaurar sessão WhatsApp do cache ────────────────
-      #    Na primeira execução não haverá cache — o bot vai gerar um QR Code
-      #    visível nos logs desta ação. Escaneie pelo GitHub → Actions → log do job.
       - name: Restaurar sessão WhatsApp
         uses: actions/cache/restore@v4
         id: cache-restore
@@ -43,14 +41,21 @@ jobs:
       - name: Status da sessão
         run: |
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ Sessão WhatsApp restaurada do cache — sem necessidade de QR Code"
+            echo "✅ Sessão WhatsApp restaurada do cache"
           else
-            echo "⚠️  Nenhuma sessão anterior. O bot vai gerar um QR Code nos logs."
-            echo "    Escaneie-o com o WhatsApp para autenticar."
+            echo "⚠️  Nenhuma sessão anterior — o bot vai gerar QR Code nos logs."
           fi
 
-      # ── 5. Rodar o bot ───────────────────────────────────────
-      - name: Iniciar bot WhatsApp
+      # ── 5. Instalar cloudflared (túnel HTTPS público para o bot) ──
+      - name: Instalar cloudflared
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+          cloudflared --version
+
+      # ── 6. Iniciar bot em background ─────────────────────────
+      - name: Iniciar bot WhatsApp (background)
         working-directory: whatsapp-scheduler-bot/baileys-server
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -60,12 +65,77 @@ jobs:
           BOT_INSTANCE_NAME: ${{ secrets.BOT_INSTANCE_NAME || 'whatsapp_bot' }}
           AUTH_INFO_PATH: ./auth_info
           PORT: 3000
-        # O bot roda indefinidamente — o timeout do job acima (330min) vai encerrá-lo
-        # O `|| true` garante que o step não falhe quando o job for cancelado pelo timeout
-        run: node src/index.js || true
+        run: |
+          node src/index.js > /tmp/bot.log 2>&1 &
+          echo "BOT_PID=$!" >> $GITHUB_ENV
+          echo "Bot iniciado com PID $!"
+          # Aguardar porta 3000 subir (até 30s)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "✅ Bot respondendo na porta 3000"
+              break
+            fi
+            echo "⏳ Aguardando bot... ($i/30)"
+            sleep 1
+          done
 
-      # ── 6. Salvar sessão WhatsApp no cache ───────────────────
-      #    Roda SEMPRE (mesmo se o bot parar por erro), para preservar a sessão
+      # ── 7. Criar túnel Cloudflare e atualizar Edge Function ──
+      - name: Criar túnel público (Cloudflare Quick Tunnel)
+        run: |
+          # Iniciar túnel em background e capturar URL
+          cloudflared tunnel --url http://localhost:3000 --no-autoupdate \
+            > /tmp/cloudflared.log 2>&1 &
+          echo "TUNNEL_PID=$!" >> $GITHUB_ENV
+
+          # Aguardar URL aparecer nos logs (até 30s)
+          TUNNEL_URL=""
+          for i in $(seq 1 30); do
+            TUNNEL_URL=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+            if [ -n "$TUNNEL_URL" ]; then
+              echo "✅ Túnel criado: $TUNNEL_URL"
+              break
+            fi
+            echo "⏳ Aguardando URL do túnel... ($i/30)"
+            sleep 1
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Falha ao obter URL do túnel. Logs:"
+            cat /tmp/cloudflared.log
+            exit 1
+          fi
+
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+
+          # Atualizar secret BAILEYS_API_URL na Edge Function do Supabase
+          echo "🔄 Atualizando BAILEYS_API_URL na Edge Function..."
+          HTTP_STATUS=$(curl -s -o /tmp/supabase_resp.txt -w "%{http_code}" \
+            -X POST "${{ secrets.SUPABASE_URL }}/functions/v1/webhook-whatsapp/__secrets" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\":\"BAILEYS_API_URL\",\"value\":\"$TUNNEL_URL\"}" || true)
+
+          # Usar Management API para setar secret no projeto
+          HTTP_STATUS=$(curl -s -o /tmp/sb_secret_resp.txt -w "%{http_code}" \
+            -X POST "https://api.supabase.com/v1/projects/${{ secrets.SUPABASE_PROJECT_ID }}/secrets" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ACCESS_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "[{\"name\":\"BAILEYS_API_URL\",\"value\":\"$TUNNEL_URL\"}]")
+
+          echo "Supabase secret update status: $HTTP_STATUS"
+          cat /tmp/sb_secret_resp.txt || true
+
+      # ── 8. Manter bot rodando até timeout ────────────────────
+      - name: Manter bot ativo
+        run: |
+          echo "🤖 Bot rodando com túnel: $TUNNEL_URL"
+          echo "⏳ Mantendo ativo por ~5h15min..."
+          # Mostrar logs do bot periodicamente e manter vivo
+          ( tail -f /tmp/bot.log & )
+          sleep 18900  # 5h15min
+          echo "⏱️ Tempo esgotado — encerrando"
+
+      # ── 9. Salvar sessão WhatsApp no cache ───────────────────
       - name: Salvar sessão WhatsApp no cache
         uses: actions/cache/save@v4
         if: always()
