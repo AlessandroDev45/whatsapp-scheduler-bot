@@ -1,6 +1,6 @@
 # 🏥 ANÁLISE DE SAÚDE DO CÓDIGO - WhatsApp Scheduler Bot
 
-**Data:** 27/10/2025  
+**Data:** 03/03/2026 (atualizado)  
 **Status:** ✅ CÓDIGO SAUDÁVEL E OTIMIZADO
 
 ---
@@ -262,6 +262,8 @@ function log(level: string, message: string) {
 ### Prioridade ALTA (Fazer Agora)
 **Nenhuma!** ✅ O código está saudável e funcionando corretamente.
 
+> ✅ **Bugs críticos corrigidos em 03/03/2026** — ver seção abaixo.
+
 ### Prioridade MÉDIA (Fazer Depois)
 1. **Refatorar `index.ts`** em módulos menores (melhora manutenibilidade)
 2. **Implementar níveis de log** (reduz logs em produção)
@@ -304,5 +306,38 @@ function log(level: string, message: string) {
 ---
 
 **Gerado automaticamente em:** 27/10/2025  
-**Próxima revisão recomendada:** 27/11/2025
+**Última revisão:** 03/03/2026  
+**Próxima revisão recomendada:** 03/06/2026
+
+---
+
+## 🔧 CORREÇÕES APLICADAS EM 03/03/2026
+
+### Bug 1 — Timezone no Scheduler (CRÍTICO)
+**Arquivo:** `baileys-server/src/scheduler.js`  
+**Problema:** `calcularProximoEnvio` usava `new Date(localeString)` interpretado como UTC, causando envio 3h antes do horário correto (BRT = UTC-3).  
+**Correção:** Offset explícito `OFFSET_BRT_MS = -3 * 60 * 60 * 1000` aplicado.  
+
+### Bug 2 — Double-send perto da meia-noite (CRÍTICO)
+**Arquivo:** `baileys-server/src/scheduler.js`  
+**Problema:** Verificação "já enviado hoje" usava `T00:00:00Z` (meia-noite UTC = 21h BRT), fazendo o scheduler enviar duplicatas entre 21h e 00h BRT.  
+**Correção:** Verificação alterada para `${hojeBRT}T00:00:00-03:00`.  
+
+### Bug 3 — Edge Function crash em env var faltando (CRÍTICO)
+**Arquivo:** `supabase/functions/webhook-whatsapp/index.ts`  
+**Problema:** `throw new Error(...)` no topo do arquivo derrubava **todas** as requests se qualquer variável de ambiente estivesse ausente.  
+**Correção:** Substituído por `console.error()` individual por variável.  
+
+### Bug 4 — Mensagens de mídia ignoradas
+**Arquivo:** `baileys-server/src/messageHandler.js`  
+**Problema:** `imageMessage`, `videoMessage`, `documentMessage`, `audioMessage` não eram processados (caption ignorada).  
+**Correção:** Adicionado handler para extrair `caption` de mensagens de mídia.  
+
+### Migração de Infraestrutura — Fly.io → GitHub Actions
+- `fly.toml` deletado
+- `Dockerfile` atualizado
+- `docker-compose.yml` criado
+- `.github/workflows/bot-runner.yml` criado (cron a cada 5h, sessão em cache)
+- **Cloudflare Quick Tunnel** integrado: expõe API do bot publicamente e atualiza `BAILEYS_API_URL` na Edge Function automaticamente a cada run via Supabase Management API
+- `whatsapp.js`: path `auth_info` migrado para `process.env.AUTH_INFO_PATH`
 

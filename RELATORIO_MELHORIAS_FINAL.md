@@ -1,8 +1,8 @@
 # 🎉 RELATÓRIO FINAL - MELHORIAS IMPLEMENTADAS
 
-**Data:** 2025-10-25  
+**Data:** 2025-10-25 | **Atualizado:** 03/03/2026  
 **Arquivo:** `whatsapp-scheduler-bot/supabase/functions/webhook-whatsapp/index.ts`  
-**Total de linhas:** 3.153 linhas
+**Total de linhas:** 3.377 linhas
 
 ---
 
@@ -269,4 +269,53 @@ index.ts (3.153 linhas)
 
 **Desenvolvido com excelência por AleTubeGames**  
 **Data de conclusão:** 2025-10-25
+
+---
+
+# 🔧 CORREÇÕES ADICIONAIS — 03/03/2026
+
+## Contexto
+Bot parou de funcionar após expiração da conta Fly.io (trial de 28 dias). Migração completa para GitHub Actions + correção de 4 bugs críticos.
+
+## Bugs Corrigidos
+
+| # | Arquivo | Bug | Impacto |
+|---|---------|-----|---------|
+| 1 | `scheduler.js` | Timezone BRT: mensagens 3h antes | Crítico |
+| 2 | `scheduler.js` | Double-send 21h-00h (UTC vs BRT) | Crítico |
+| 3 | `webhook-whatsapp/index.ts` | `throw` derrubava todas as requests | Crítico |
+| 4 | `messageHandler.js` | Mídia (foto/vídeo) sem caption ignorada | Médio |
+
+## Infraestrutura
+
+| Item | Antes | Depois |
+|------|-------|--------|
+| Hosting | Fly.io (expirado) | GitHub Actions (gratuito) |
+| URL pública | `whatsapp-bot-ale-2025.fly.dev` | Cloudflare Quick Tunnel (auto) |
+| Sessão WhatsApp | Volume Fly.io | `actions/cache` (GitHub) |
+| `AUTH_INFO_PATH` | Hardcoded `/app/auth_info` | `process.env.AUTH_INFO_PATH` |
+| `BAILEYS_API_URL` | Fixo no código | Atualizado via Supabase Management API |
+
+## Arquivos Novos/Modificados
+
+- ✅ `.github/workflows/bot-runner.yml` — workflow principal (cron 5h, tunnel, cache)
+- ✅ `.github/workflows/docker-publish.yml` — build Docker opcional
+- ✅ `baileys-server/docker-compose.yml` — alternativa local
+- ✅ `baileys-server/src/whatsapp.js` — AUTH_INFO_PATH dinâmico
+- ✅ `baileys-server/src/scheduler.js` — timezone BRT corrigido
+- ✅ `baileys-server/src/messageHandler.js` — suporte a mídia
+- ✅ `supabase/functions/webhook-whatsapp/index.ts` — throw → console.error
+- ✅ `scripts/_setup_github_secrets.py` — configura 7 secrets via API
+- ✅ `scripts/_teste_familia.py` — cria agendamento de teste
+
+## Status Final
+
+- ✅ Bot conectado (`5519987200383`)
+- ✅ Scheduler enviando mensagens corretamente (timezone BRT)
+- ✅ Comandos WhatsApp funcionando (`/novo`, `/listar`, etc.)
+- ✅ Cloudflare Tunnel ativo (Edge Function consegue responder)
+- ✅ Sessão WhatsApp persistida no cache do GitHub Actions
+- ✅ Workflow reinicia automaticamente a cada 5h
+
+**Último commit:** `d81f89e` — 03/03/2026
 
