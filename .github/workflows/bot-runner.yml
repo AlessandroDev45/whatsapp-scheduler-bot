@@ -7,6 +7,15 @@ on:
 
   # Permite iniciar manualmente pelo painel do GitHub
   workflow_dispatch:
+    inputs:
+      force_new_session:
+        description: 'Forçar nova sessão WhatsApp (gerar novo QR Code)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   run-bot:
@@ -31,6 +40,7 @@ jobs:
 
       # ── 4. Restaurar sessão WhatsApp do cache ────────────────
       - name: Restaurar sessão WhatsApp
+        if: ${{ github.event.inputs.force_new_session != 'true' }}
         uses: actions/cache/restore@v4
         id: cache-restore
         with:
@@ -40,7 +50,10 @@ jobs:
 
       - name: Status da sessão
         run: |
-          if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
+          if [ "${{ github.event.inputs.force_new_session }}" == "true" ]; then
+            echo "🔄 FORÇANDO NOVA SESSÃO — QR Code será gerado nos logs"
+            rm -rf whatsapp-scheduler-bot/baileys-server/auth_info
+          elif [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
             echo "✅ Sessão WhatsApp restaurada do cache"
           else
             echo "⚠️  Nenhuma sessão anterior — o bot vai gerar QR Code nos logs."
@@ -63,6 +76,7 @@ jobs:
           SUPABASE_WEBHOOK_URL: ${{ secrets.SUPABASE_WEBHOOK_URL }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           BOT_INSTANCE_NAME: ${{ secrets.BOT_INSTANCE_NAME || 'whatsapp_bot' }}
+          ADMIN_NUMBER: ${{ secrets.ADMIN_NUMBER }}
           AUTH_INFO_PATH: ./auth_info
           PORT: 3000
         run: |

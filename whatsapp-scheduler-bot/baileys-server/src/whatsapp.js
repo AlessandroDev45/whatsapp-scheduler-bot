@@ -64,17 +64,36 @@ export async function initWhatsApp() {
     }
 
     if (connection === 'close') {
-      const shouldReconnect = (lastDisconnect?.error instanceof Boom)
-        ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
-        : true;
-
       const statusCode = lastDisconnect?.error instanceof Boom
         ? lastDisconnect.error.output.statusCode
         : 'unknown';
 
-      console.log(`❌ Conexão fechada. Status: ${statusCode}, Reconectando: ${shouldReconnect}`);
+      const isLoggedOut = (lastDisconnect?.error instanceof Boom)
+        && lastDisconnect.error.output.statusCode === DisconnectReason.loggedOut;
 
-      if (shouldReconnect) {
+      console.log(`❌ Conexão fechada. Status: ${statusCode}, LoggedOut: ${isLoggedOut}`);
+
+      if (isLoggedOut) {
+        // Sessão expirada/inválida — limpar auth_info e reconectar para gerar novo QR
+        console.log('🔑 Sessão expirada! Limpando auth_info para gerar novo QR Code...');
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          const authPath = process.env.AUTH_INFO_PATH || './auth_info';
+          if (fs.existsSync(authPath)) {
+            const files = fs.readdirSync(authPath);
+            for (const file of files) {
+              fs.unlinkSync(path.join(authPath, file));
+            }
+            console.log('🗑️ Auth info limpo com sucesso');
+          }
+        } catch (err) {
+          console.error('⚠️ Erro ao limpar auth_info:', err.message);
+        }
+        console.log('🔄 Reconectando em 5 segundos para gerar novo QR Code...');
+        setTimeout(() => initWhatsApp(), 5000);
+      } else {
+        // Outro erro (rede, timeout, etc) — reconectar normalmente
         console.log('🔄 Reconectando em 3 segundos...');
         setTimeout(() => initWhatsApp(), 3000);
       }
