@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
-import { sendMessage, getWhatsAppClient } from './whatsapp.js';
+import { sendMessage, getWhatsAppClient, isWhatsAppConnected } from './whatsapp.js';
 
 config();
 
@@ -140,8 +140,7 @@ async function processarAgendamentos() {
     // ========================================
     // VERIFICAÇÃO 1: WhatsApp está conectado?
     // ========================================
-    const sock = getWhatsAppClient();
-    if (!sock) {
+    if (!isWhatsAppConnected()) {
       console.log('⚠️ WhatsApp não está conectado. Pulando verificação de agendamentos.');
       return;
     }
@@ -264,8 +263,7 @@ async function processarAgendamentos() {
         // ========================================
         // Re-verificar conexão antes de enviar
         // ========================================
-        const sockAtual = getWhatsAppClient();
-        if (!sockAtual) {
+        if (!isWhatsAppConnected()) {
           console.log('⚠️ WhatsApp desconectou durante o processamento. Abortando.');
           return;
         }
@@ -287,7 +285,7 @@ async function processarAgendamentos() {
         await supabase.from('historico_envios').insert({
           agendamento_id: agendamento.id,
           status: 'enviado',
-          mensagem_id: result.key?.id || 'unknown',
+          mensagem_id: result?.key?.id || 'unknown',
           erro: null
         });
 
