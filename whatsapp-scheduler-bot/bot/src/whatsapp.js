@@ -42,6 +42,8 @@ export async function initWhatsApp() {
     getMessage: async () => undefined
   });
 
+  
+
   console.log('🔧 [WhatsApp] Socket criado. Registrando event handlers...');
 
   // Evento: Atualização de conexão
