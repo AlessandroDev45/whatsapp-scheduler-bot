@@ -4,6 +4,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.42.0'
 import { corsHeaders } from '../_shared/cors.ts'
 
+// Deploy version: 2026-04-01T23:30 - LID fix
 // Carregar variáveis de ambiente
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -496,7 +497,8 @@ serve(async (req: Request) => {
     console.log(`📝 [WEBHOOK] Texto extraído e sanitizado: "${messageText}"`)
 
     const isGroup = body.data.key.remoteJid.endsWith('@g.us')
-    const isChannel = body.data.key.remoteJid.endsWith('@lid') // Canais/Listas do WhatsApp
+    const isChannel = body.data.key.remoteJid.endsWith('@newsletter')
+    // NOTA: @lid é o formato LID (Long ID) do WhatsApp para conversas privadas, NÃO é canal
     console.log(`👥 [WEBHOOK] É grupo: ${isGroup}, É canal: ${isChannel}`)
 
     // Determinar o remetente real
