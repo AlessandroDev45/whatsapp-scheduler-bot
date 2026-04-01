@@ -51,8 +51,29 @@ CREDENCIAIS-ACESSO.md
 NUMEROS_WHATSAPP.md
 **/CREDENCIAIS.txt
 
-# Node modules (if any)
+# Node modules
 node_modules/
+
+# WhatsApp Bot - Sessão (salva no GitHub Actions Cache, nunca commitar)
+whatsapp-scheduler-bot/bot/auth_info/
+whatsapp-scheduler-bot/auth_info/
+auth_info/
+
+# WhatsApp Bot - Arquivos de teste
+test-*.js
+testar-*.js
+verificar-*.js
+debug-*.js
+simular-*.js
+*-teste.js
+*-test.js
+
+# Arquivos temporários
+*.tmp
+*.temp
+npm-debug.log*
+logs/
+desktop.ini
 
 # Temporary files
 *.tmp
