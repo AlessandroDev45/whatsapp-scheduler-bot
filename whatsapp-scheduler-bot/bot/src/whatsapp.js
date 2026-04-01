@@ -11,6 +11,7 @@ import { processIncomingMessage } from './messageHandler.js';
 
 let sock = null;
 let qrCodeData = null;
+let connected = false;
 
 const logger = pino({ level: 'silent' }); // Silenciar logs internos
 
@@ -71,6 +72,7 @@ export async function initWhatsApp() {
       const isLoggedOut = (lastDisconnect?.error instanceof Boom)
         && lastDisconnect.error.output.statusCode === DisconnectReason.loggedOut;
 
+      connected = false;
       console.log(`❌ Conexão fechada. Status: ${statusCode}, LoggedOut: ${isLoggedOut}`);
 
       if (isLoggedOut) {
@@ -98,6 +100,7 @@ export async function initWhatsApp() {
         setTimeout(() => initWhatsApp(), 3000);
       }
     } else if (connection === 'open') {
+      connected = true;
       console.log('\n');
       console.log('═══════════════════════════════════════════════════════');
       console.log('✅ WhatsApp conectado com sucesso!');
@@ -137,6 +140,10 @@ export async function initWhatsApp() {
 
 export function getWhatsAppClient() {
   return sock;
+}
+
+export function isWhatsAppConnected() {
+  return connected && sock !== null;
 }
 
 export function getQRCode() {
