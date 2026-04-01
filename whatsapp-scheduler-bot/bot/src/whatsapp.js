@@ -12,7 +12,7 @@ import { processIncomingMessage } from './messageHandler.js';
 let sock = null;
 let qrCodeData = null;
 
-const logger = pino({ level: 'silent' }); // Silenciar logs do Baileys
+const logger = pino({ level: 'silent' }); // Silenciar logs internos
 
 export async function initWhatsApp() {
   // AUTH_INFO_PATH pode ser definido em .env para flexibilidade local ou em containers
@@ -22,9 +22,9 @@ export async function initWhatsApp() {
 
   const { state, saveCreds } = await useMultiFileAuthState(authInfoPath);
 
-  console.log('🔧 [WhatsApp] Auth state carregado. Buscando versão do Baileys...');
+  console.log('🔧 [WhatsApp] Auth state carregado. Buscando versão...');
   const { version } = await fetchLatestBaileysVersion();
-  console.log(`🔧 [WhatsApp] Versão do Baileys: ${version.join('.')}`);
+  console.log(`🔧 [WhatsApp] Versão: ${version.join('.')}`);
 
   console.log('🔧 [WhatsApp] Criando socket WhatsApp...');
   sock = makeWASocket({

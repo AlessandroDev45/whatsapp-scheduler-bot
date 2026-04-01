@@ -33,7 +33,7 @@ setupRoutes(app);
 app.listen(PORT, async () => {
   console.log(`
 ╔═══════════════════════════════════════════════╗
-║  🚀 WHATSAPP BAILEYS SERVER                  ║
+║  🚀 WHATSAPP BOT SERVER                     ║
 ║  📡 Servidor rodando na porta ${PORT}           ║
 ╚═══════════════════════════════════════════════╝
   `);

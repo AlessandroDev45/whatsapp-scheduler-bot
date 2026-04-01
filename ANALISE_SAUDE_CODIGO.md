@@ -175,7 +175,7 @@ idx_mensagens_processadas_message_id_expira
 #### 5.1. Estrutura de Arquivos
 ```
 whatsapp-scheduler-bot/
-├── baileys-server/
+├── bot/
 │   ├── src/
 │   │   ├── api.js          (✅ 345 linhas)
 │   │   ├── index.js        (✅ 50 linhas)
@@ -195,7 +195,7 @@ whatsapp-scheduler-bot/
 ```
 
 **Observações:**
-- ✅ Baileys Server bem modularizado
+- ✅ Bot server bem modularizado
 - ⚠️ `webhook-whatsapp/index.ts` muito grande (3376 linhas)
 - ✅ Migrations bem organizadas
 

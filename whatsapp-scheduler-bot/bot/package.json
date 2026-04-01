@@ -1,14 +1,14 @@
 {
-  "name": "whatsapp-baileys-server",
+  "name": "whatsapp-bot-server",
   "version": "1.0.0",
-  "description": "Servidor WhatsApp com Baileys para agendamento de mensagens",
+  "description": "Servidor WhatsApp Bot para agendamento de mensagens",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
   },
-  "keywords": ["whatsapp", "baileys", "scheduler", "bot"],
+  "keywords": ["whatsapp", "scheduler", "bot"],
   "author": "AleTubeGames",
   "license": "MIT",
   "dependencies": {

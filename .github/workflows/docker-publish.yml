@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - 'whatsapp-scheduler-bot/baileys-server/**'
+      - 'whatsapp-scheduler-bot/bot/**'
   workflow_dispatch:   # Permite rodar manualmente pelo GitHub
 
 env:
@@ -41,8 +41,8 @@ jobs:
       - name: Build e push da imagem Docker
         uses: docker/build-push-action@v5
         with:
-          context: ./whatsapp-scheduler-bot/baileys-server
-          file: ./whatsapp-scheduler-bot/baileys-server/Dockerfile
+          context: ./whatsapp-scheduler-bot/bot
+          file: ./whatsapp-scheduler-bot/bot/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -66,7 +66,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
           script: |
-            cd ~/whatsapp-scheduler-bot/baileys-server
+            cd ~/whatsapp-scheduler-bot/bot
 
             # Baixar imagem mais recente
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin

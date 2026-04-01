@@ -35,7 +35,7 @@ jobs:
 
       # ── 3. Dependências ──────────────────────────────────────
       - name: Instalar dependências
-        working-directory: whatsapp-scheduler-bot/baileys-server
+        working-directory: whatsapp-scheduler-bot/bot
         run: npm ci --only=production
 
       # ── 4. Restaurar sessão WhatsApp do cache ────────────────
@@ -44,7 +44,7 @@ jobs:
         uses: actions/cache/restore@v4
         id: cache-restore
         with:
-          path: whatsapp-scheduler-bot/baileys-server/auth_info
+          path: whatsapp-scheduler-bot/bot/auth_info
           key: whatsapp-auth-session
           restore-keys: whatsapp-auth-session
 
@@ -52,7 +52,7 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.force_new_session }}" == "true" ]; then
             echo "🔄 FORÇANDO NOVA SESSÃO — QR Code será gerado nos logs"
-            rm -rf whatsapp-scheduler-bot/baileys-server/auth_info
+            rm -rf whatsapp-scheduler-bot/bot/auth_info
           elif [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
             echo "✅ Sessão WhatsApp restaurada do cache"
           else
@@ -69,7 +69,7 @@ jobs:
 
       # ── 6. Iniciar bot em background ─────────────────────────
       - name: Iniciar bot WhatsApp (background)
-        working-directory: whatsapp-scheduler-bot/baileys-server
+        working-directory: whatsapp-scheduler-bot/bot
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -121,20 +121,20 @@ jobs:
 
           echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
 
-          # Atualizar secret BAILEYS_API_URL na Edge Function do Supabase
-          echo "🔄 Atualizando BAILEYS_API_URL na Edge Function..."
+          # Atualizar secret BOT_API_URL na Edge Function do Supabase
+          echo "🔄 Atualizando BOT_API_URL na Edge Function..."
           HTTP_STATUS=$(curl -s -o /tmp/supabase_resp.txt -w "%{http_code}" \
             -X POST "${{ secrets.SUPABASE_URL }}/functions/v1/webhook-whatsapp/__secrets" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{\"name\":\"BAILEYS_API_URL\",\"value\":\"$TUNNEL_URL\"}" || true)
+            -d "{\"name\":\"BOT_API_URL\",\"value\":\"$TUNNEL_URL\"}" || true)
 
           # Usar Management API para setar secret no projeto
           HTTP_STATUS=$(curl -s -o /tmp/sb_secret_resp.txt -w "%{http_code}" \
             -X POST "https://api.supabase.com/v1/projects/${{ secrets.SUPABASE_PROJECT_ID }}/secrets" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_ACCESS_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "[{\"name\":\"BAILEYS_API_URL\",\"value\":\"$TUNNEL_URL\"}]")
+            -d "[{\"name\":\"BOT_API_URL\",\"value\":\"$TUNNEL_URL\"}]")
 
           echo "Supabase secret update status: $HTTP_STATUS"
           cat /tmp/sb_secret_resp.txt || true
@@ -154,5 +154,5 @@ jobs:
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: whatsapp-scheduler-bot/baileys-server/auth_info
+          path: whatsapp-scheduler-bot/bot/auth_info
           key: whatsapp-auth-session-${{ github.run_id }}

@@ -1,7 +1,7 @@
-# Dockerfile para servidor Baileys (auto-hospedado / VPS / GitHub Actions)
+# Dockerfile para WhatsApp Bot (auto-hospedado / VPS / GitHub Actions)
 FROM node:20-alpine
 
-# Instalar dependências do sistema necessárias para Baileys
+# Instalar dependências do sistema
 RUN apk add --no-cache \
     python3 \
     make \

@@ -299,16 +299,16 @@ Bot parou de funcionar após expiração da conta Fly.io (trial de 28 dias). Mig
 | URL pública | `whatsapp-bot-ale-2025.fly.dev` | Cloudflare Quick Tunnel (auto) |
 | Sessão WhatsApp | Volume Fly.io | `actions/cache` (GitHub) |
 | `AUTH_INFO_PATH` | Hardcoded `/app/auth_info` | `process.env.AUTH_INFO_PATH` |
-| `BAILEYS_API_URL` | Fixo no código | Atualizado via Supabase Management API |
+| `BOT_API_URL` | Fixo no código | Atualizado via Supabase Management API |
 
 ## Arquivos Novos/Modificados
 
 - ✅ `.github/workflows/bot-runner.yml` — workflow principal (cron 5h, tunnel, cache)
 - ✅ `.github/workflows/docker-publish.yml` — build Docker opcional
-- ✅ `baileys-server/docker-compose.yml` — alternativa local
-- ✅ `baileys-server/src/whatsapp.js` — AUTH_INFO_PATH dinâmico
-- ✅ `baileys-server/src/scheduler.js` — timezone BRT corrigido
-- ✅ `baileys-server/src/messageHandler.js` — suporte a mídia
+- ✅ `bot/docker-compose.yml` — alternativa local
+- ✅ `bot/src/whatsapp.js` — AUTH_INFO_PATH dinâmico
+- ✅ `bot/src/scheduler.js` — timezone BRT corrigido
+- ✅ `bot/src/messageHandler.js` — suporte a mídia
 - ✅ `supabase/functions/webhook-whatsapp/index.ts` — throw → console.error
 - ✅ `scripts/_setup_github_secrets.py` — configura 7 secrets via API
 - ✅ `scripts/_teste_familia.py` — cria agendamento de teste

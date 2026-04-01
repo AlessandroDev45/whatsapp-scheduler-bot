@@ -7,7 +7,7 @@ import { corsHeaders } from '../_shared/cors.ts'
 // Carregar variáveis de ambiente
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-const BAILEYS_API_URL = Deno.env.get('BAILEYS_API_URL') || 'https://whatsapp-bot-ale-2025.fly.dev'
+const BOT_API_URL = Deno.env.get('BOT_API_URL') || 'https://whatsapp-bot-ale-2025.fly.dev'
 const BOT_INSTANCE_NAME = Deno.env.get('BOT_INSTANCE_NAME') || 'whatsapp_bot'
 const MISTRAL_API_KEY = Deno.env.get('MISTRAL_API_KEY')
 const MISTRAL_MODEL = Deno.env.get('MISTRAL_MODEL') || 'devstral-small-2505'
@@ -19,7 +19,7 @@ const ADMIN_NUMBER = Deno.env.get('ADMIN_NUMBER')
 // Um throw a nível de módulo causa HTTP 500 em TODOS os requests sem nenhum log útil.
 if (!SUPABASE_URL) console.error('❌ [CONFIG] SUPABASE_URL não configurada')
 if (!SUPABASE_SERVICE_ROLE_KEY) console.error('❌ [CONFIG] SUPABASE_SERVICE_ROLE_KEY não configurada')
-if (!BAILEYS_API_URL) console.error('❌ [CONFIG] BAILEYS_API_URL não configurada')
+if (!BOT_API_URL) console.error('❌ [CONFIG] BOT_API_URL não configurada')
 if (!MISTRAL_API_KEY) console.error('❌ [CONFIG] MISTRAL_API_KEY não configurada')
 if (!ADMIN_NUMBER) console.error('❌ [CONFIG] ADMIN_NUMBER não configurada')
 
@@ -315,9 +315,9 @@ async function callMistralAI(userMessage: string, systemPrompt: string): Promise
 
 // Função para enviar mensagem de texto (COM LÓGICA DE "AQUECIMENTO" PARA GRUPOS)
 async function sendText(recipient: string, message: string) {
-  const url = `${BAILEYS_API_URL}/api/send-message`;
+  const url = `${BOT_API_URL}/api/send-message`;
   console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`📤 [SEND_TEXT] Enviando mensagem via Baileys`);
+  console.log(`📤 [SEND_TEXT] Enviando mensagem via WhatsApp Bot`);
   console.log(`👤 [SEND_TEXT] Destinatário: ${recipient}`);
   console.log(`📝 [SEND_TEXT] Mensagem (${message.length} chars): ${message.substring(0, 150)}${message.length > 150 ? '...' : ''}`);
   console.log(`🔗 [SEND_TEXT] URL: ${url}`);
@@ -401,9 +401,9 @@ async function buscarNomeDestinatario(jid: string): Promise<string> {
         return grupo.nome
       }
 
-      // Se não encontrou no banco, tentar buscar do Baileys
+      // Se não encontrou no banco, tentar buscar do Bot
       try {
-        const response = await fetch(`${BAILEYS_API_URL}/api/group-metadata?jid=${encodeURIComponent(jid)}`)
+        const response = await fetch(`${BOT_API_URL}/api/group-metadata?jid=${encodeURIComponent(jid)}`)
         if (response.ok) {
           const data = await response.json()
           return data.subject || jid
@@ -435,7 +435,7 @@ async function sendButtons(recipient: string, message: string, buttons: Array<{i
 
 // Função para enviar BOTÕES INTERATIVOS (sempre usa texto numerado com Baileys)
 async function sendInteractiveButtons(recipient: string, message: string, buttons: Array<{id: string, text: string}>) {
-  console.log('🔘 Enviando botões como texto numerado (Baileys)...')
+  console.log('🔘 Enviando botões como texto numerado (Bot)...')
   await sendButtons(recipient, message, buttons)
 }
 
@@ -1064,8 +1064,8 @@ Digite */novo* para começar novamente.`
 Aguarde alguns segundos...`)
 
       try {
-        // Buscar grupos do Baileys
-        const response = await fetch(`${BAILEYS_API_URL}/api/groups`, {
+        // Buscar grupos do Bot
+        const response = await fetch(`${BOT_API_URL}/api/groups`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json'
@@ -1909,7 +1909,7 @@ ${tipoEmoji} *Destinatário:* ${destinatarioDisplay}
       }
     }
 
-    // FUNÇÃO 2: Busca principal (apenas no banco de dados - Baileys não tem API de busca)
+    // FUNÇÃO 2: Busca principal (apenas no banco de dados - Bot não tem API de busca)
     async function buscarDestinatariosPorNome(filtro: string, usuarioId: string): Promise<Array<{id: string, nome: string, tipo: string}>> {
       console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
       console.log(`🔍 [BUSCA] Buscando por "${filtro}" no banco de dados`);

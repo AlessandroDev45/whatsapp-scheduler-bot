@@ -280,7 +280,7 @@ async function processarAgendamentos() {
           console.log(`✨ Variação gerada: ${mensagemFinal.substring(0, 50)}...`);
         }
 
-        // Enviar mensagem via Baileys
+        // Enviar mensagem via WhatsApp
         const result = await sendMessage(agendamento.destinatario_id, mensagemFinal);
 
         // Registrar no histórico

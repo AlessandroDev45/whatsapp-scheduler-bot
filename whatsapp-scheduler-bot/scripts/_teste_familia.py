@@ -69,7 +69,7 @@ if r.status_code in (200, 201):
     print(f"   UTC:        {proximo_envio_iso}")
     print()
     print('⚠️  Certifique-se que o bot está rodando!')
-    print('   cd baileys-server && docker compose up -d')
+    print('   cd bot && docker compose up -d')
     print('   OU: node src/index.js')
 else:
     print(f'Erro {r.status_code}: {r.text}')

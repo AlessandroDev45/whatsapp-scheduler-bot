@@ -3,7 +3,7 @@ node_modules/
 # package-lock.json não ignorado — necessário para o GitHub Actions instalar dependências corretamente
 
 # Sessão WhatsApp (nunca commitar — salva no GitHub Actions Cache)
-baileys-server/auth_info/
+bot/auth_info/
 auth_info/
 
 # Variáveis de ambiente

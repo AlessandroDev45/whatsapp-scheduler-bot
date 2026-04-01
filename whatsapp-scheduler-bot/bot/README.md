@@ -1,6 +1,6 @@
-# 📱 WhatsApp Scheduler Bot — Servidor Baileys
+# 📱 WhatsApp Scheduler Bot
 
-Servidor Node.js que mantém a conexão com o WhatsApp via **Baileys** e executa os agendamentos de mensagens configurados no Supabase.
+Servidor Node.js que mantém a conexão com o WhatsApp e executa os agendamentos de mensagens configurados no Supabase.
 
 ## 🏗️ Arquitetura
 
