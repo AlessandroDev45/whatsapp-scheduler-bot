@@ -343,14 +343,6 @@ async function processarAgendamentos() {
           erro: error.message
         });
 
-        // Se erro é "forbidden" = bot não é membro do grupo
-        if (error.message === 'forbidden') {
-          console.error(`🚫 [FORBIDDEN] O bot NÃO É MEMBRO do grupo/contato: ${agendamento.destinatario_id}`);
-          console.error(`   → Solução: Adicione o número do bot ao grupo no WhatsApp`);
-          console.error(`   → Número do bot: ${process.env.BOT_INSTANCE_NAME || 'ver variável BOT_INSTANCE_NAME'}`);
-          continue; // Não aborta os demais, apenas pula este
-        }
-
         // Se erro é de conexão, abortar todos os demais agendamentos
         if (error.message === 'Connection Closed' || error.message === 'WhatsApp não está conectado') {
           console.log('🔌 Conexão perdida. Abortando processamento dos demais agendamentos.');
