@@ -502,29 +502,35 @@ serve(async (req: Request) => {
     // Determinar o remetente real
     console.log('👤 [WEBHOOK] Determinando remetente...')
     let sender: string
+    let senderJid: string
     if (isGroup || isChannel) {
       // Em grupos/canais, pegar o participant
       const participant = body.data.key.participant || ''
       const remoteJid = body.data.key.remoteJid || ''
       sender = (participant ? participant.split('@')[0] : remoteJid.split('@')[0] || '').trim()
+      senderJid = remoteJid // Responder no grupo
       console.log(`   - Participant: ${participant}`)
       console.log(`   - RemoteJid: ${remoteJid}`)
     } else {
-      // Em conversas privadas, pegar o remoteJid
+      // Em conversas privadas
       const remoteJid = body.data.key.remoteJid || ''
-      sender = (remoteJid.split('@')[0] || '').trim()
+      // WhatsApp agora usa LID (Long ID) em vez do número real.
+      // O bot envia o número real em data.senderNumber quando disponível.
+      const senderNumber = body.data.senderNumber || ''
+      sender = senderNumber || (remoteJid.split('@')[0] || '').trim()
+      // Usar remoteJid original (LID) para responder — é o JID que o WhatsApp reconhece
+      senderJid = remoteJid
       console.log(`   - RemoteJid: ${remoteJid}`)
+      console.log(`   - SenderNumber: ${senderNumber}`)
     }
     console.log(`👤 [WEBHOOK] Sender identificado: ${sender}`)
+    console.log(`📱 [WEBHOOK] SenderJid (para resposta): ${senderJid}`)
 
     // Validar sender
     if (!sender || sender.length === 0) {
       console.error('❌ [WEBHOOK] Remetente inválido ou vazio')
       return new Response('Remetente inválido', { status: 400 })
     }
-
-    const senderJid = `${sender}@s.whatsapp.net`
-    console.log(`📱 [WEBHOOK] SenderJid: ${senderJid}`)
 
     // Ignorar mensagens enviadas pela própria API (não pelo usuário)
     // Verificar se é uma mensagem de retorno do bot (fromMe: true)

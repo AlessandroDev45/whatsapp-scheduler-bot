@@ -61,26 +61,37 @@ export async function processIncomingMessage(sock, message) {
     const remoteJid = message.key.remoteJid;
     const isGroup = remoteJid.endsWith('@g.us');
     const sender = isGroup ? message.key.participant : remoteJid;
-    const senderNumber = sender.split('@')[0];
+    
+    // WhatsApp agora usa LID (Long ID) em vez do número real.
+    // O número real vem em senderPn (sender Phone Number).
+    // Precisamos enviar o número real para a Edge Function identificar o usuário.
+    const senderPn = message.key.senderPn || null;
+    const senderNumber = senderPn 
+      ? senderPn.split('@')[0]  // Número real do telefone
+      : sender.split('@')[0];   // Fallback para remoteJid
 
     // Extrair nome do remetente
     const pushName = message.pushName || 'Usuário';
 
     console.log(`👤 [MESSAGE_HANDLER] Remetente: ${pushName} (${senderNumber})`);
     console.log(`📍 [MESSAGE_HANDLER] RemoteJid: ${remoteJid}`);
+    console.log(`📱 [MESSAGE_HANDLER] SenderPn: ${senderPn || 'N/A'}`);
     console.log(`👥 [MESSAGE_HANDLER] É grupo: ${isGroup}`);
     
     // Montar payload no formato que a Edge Function espera
+    // Usar remoteJid original (LID) para que a resposta seja enviada corretamente
+    // Incluir senderNumber com o número real para identificação na tabela usuarios_autorizados
     const payload = {
       event: 'messages.upsert',
       instance: process.env.BOT_INSTANCE_NAME || 'whatsapp_bot',
       data: {
         key: {
           remoteJid,
-          fromMe: message.key.fromMe || false, // ← USAR O VALOR REAL DA MENSAGEM!
+          fromMe: message.key.fromMe || false,
           id: message.key.id,
           participant: isGroup ? sender : undefined
         },
+        senderNumber,
         messageType,
         message: message.message,
         messageTimestamp: message.messageTimestamp,

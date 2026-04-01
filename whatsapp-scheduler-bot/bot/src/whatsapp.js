@@ -119,10 +119,6 @@ export async function initWhatsApp() {
   
   // Evento: Mensagens recebidas
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    console.log(`\n🔔 [DEBUG] messages.upsert event — type: "${type}", count: ${messages.length}`);
-    for (const msg of messages) {
-      console.log(`🔔 [DEBUG] msg from: ${msg.key.remoteJid}, fromMe: ${msg.key.fromMe}, id: ${msg.key.id}`);
-    }
     if (type !== 'notify') return;
     
     for (const message of messages) {
