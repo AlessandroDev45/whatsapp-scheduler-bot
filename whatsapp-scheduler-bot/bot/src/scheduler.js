@@ -140,7 +140,14 @@ async function processarAgendamentos() {
     // ========================================
     // VERIFICAÇÃO 1: WhatsApp está conectado?
     // ========================================
-    if (!isWhatsAppConnected()) {
+    const whatsappStatus = isWhatsAppConnected();
+    console.log(`🔗 Status WhatsApp: ${whatsappStatus ? '✅ CONECTADO' : '❌ DESCONECTADO'}`);
+    
+    if (!whatsappStatus) {
+      const sock = getWhatsAppClient();
+      console.log(`⚠️ Detalhes:
+        - Socket exists: ${sock !== null}
+        - WhatsApp conectado (variável): ${whatsappStatus}`);
       console.log('⚠️ WhatsApp não está conectado. Pulando verificação de agendamentos.');
       return;
     }
@@ -173,7 +180,10 @@ async function processarAgendamentos() {
       return;
     }
     
-    console.log(`✅ Encontrados ${agendamentos.length} agendamentos para processar.`);
+    console.log(`\n✅ Encontrados ${agendamentos.length} agendamento(s) para processar:`);
+    agendamentos.forEach(a => {
+      console.log(`   📋 ${a.id.substring(0, 8)}... → ${a.destinatario_nome || a.destinatario_id} às ${a.hora_envio}`);
+    });
 
     // ========================================
     // PROTEÇÃO: Avançar agendamentos com proximo_envio muito antigo
@@ -358,13 +368,17 @@ async function processarAgendamentos() {
 
 export function startScheduler() {
   console.log('⏰ Scheduler iniciado! Verificando agendamentos a cada minuto...');
+  console.log('⏰ Primeira verificação será executada IMEDIATAMENTE...\n');
+  
+  // Executar imediatamente na inicialização
+  console.log(`🚀 Executando verificação imediata às ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
+  processarAgendamentos();
   
   // Executar a cada minuto
-  cron.schedule('* * * * *', async () => {
+  const jobId = cron.schedule('* * * * *', async () => {
     console.log(`\n🔄 [${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}] Verificando agendamentos...`);
     await processarAgendamentos();
   });
   
-  // Executar imediatamente na inicialização
-  processarAgendamentos();
+  console.log('✅ Scheduler ativo - próximas verificações a cada 1 minuto\n');
 }

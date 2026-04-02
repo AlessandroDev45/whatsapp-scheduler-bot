@@ -12,8 +12,37 @@ import { processIncomingMessage } from './messageHandler.js';
 let sock = null;
 let qrCodeData = null;
 let connected = false;
+let reconnecting = false;
+let keepAliveInterval = null;
 
 const logger = pino({ level: 'silent' }); // Silenciar logs internos
+
+// Keep-alive: enviar ping periódico para manter conexão ativa
+function startKeepAlive() {
+  stopKeepAlive();
+  keepAliveInterval = setInterval(async () => {
+    if (sock && connected) {
+      try {
+        // Baileys usa websocket, enviar query simples para manter conexão
+        await sock.query({
+          tag: 'iq',
+          attrs: { to: '@s.whatsapp.net', type: 'get', xmlns: 'w:p' },
+          content: [{ tag: 'ping', attrs: {} }]
+        });
+        console.log('💓 Keep-alive ping enviado');
+      } catch (err) {
+        console.log('⚠️ Keep-alive falhou:', err.message);
+      }
+    }
+  }, 25 * 60 * 1000); // A cada 25 minutos
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+}
 
 export async function initWhatsApp() {
   // AUTH_INFO_PATH pode ser definido em .env para flexibilidade local ou em containers
@@ -39,6 +68,8 @@ export async function initWhatsApp() {
     generateHighQualityLinkPreview: true,
     syncFullHistory: false,
     markOnlineOnConnect: true,
+    keepAliveIntervalMs: 30000, // Ping a cada 30s para manter conexão
+    retryRequestDelayMs: 2000,
     getMessage: async () => undefined
   });
 
@@ -75,6 +106,7 @@ export async function initWhatsApp() {
         && lastDisconnect.error.output.statusCode === DisconnectReason.loggedOut;
 
       connected = false;
+      stopKeepAlive();
       console.log(`❌ Conexão fechada. Status: ${statusCode}, LoggedOut: ${isLoggedOut}`);
 
       if (isLoggedOut) {
@@ -103,6 +135,8 @@ export async function initWhatsApp() {
       }
     } else if (connection === 'open') {
       connected = true;
+      reconnecting = false;
+      startKeepAlive();
       console.log('\n');
       console.log('═══════════════════════════════════════════════════════');
       console.log('✅ WhatsApp conectado com sucesso!');
@@ -228,17 +262,32 @@ export async function resetConnection() {
   return { success: true, message: 'Conexão resetada. Novo QR Code será gerado.' };
 }
 
-export async function sendMessage(jid, text) {
-  if (!sock) {
+export async function sendMessage(jid, text, retries = 3) {
+  if (!sock || !connected) {
     throw new Error('WhatsApp não está conectado');
   }
   
-  try {
-    const result = await sock.sendMessage(jid, { text });
-    return result;
-  } catch (error) {
-    console.error('❌ Erro ao enviar mensagem:', error);
-    throw error;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await sock.sendMessage(jid, { text });
+      return result;
+    } catch (error) {
+      console.error(`❌ Erro ao enviar mensagem (tentativa ${attempt}/${retries}):`, error.message);
+      
+      // Se é erro de conexão e ainda temos tentativas, esperar e tentar de novo
+      if (attempt < retries && (error.message === 'Connection Closed' || error.message?.includes('connection'))) {
+        const delay = attempt * 3000; // 3s, 6s, 9s
+        console.log(`⏳ Aguardando ${delay/1000}s antes de tentar novamente...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        
+        // Verificar se reconectou
+        if (!sock || !connected) {
+          throw new Error('WhatsApp desconectou durante retry');
+        }
+        continue;
+      }
+      throw error;
+    }
   }
 }
 
