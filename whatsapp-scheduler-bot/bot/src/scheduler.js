@@ -187,21 +187,25 @@ async function processarAgendamentos() {
 
     // ========================================
     // PROTEÇÃO: Avançar agendamentos com proximo_envio muito antigo
-    // Se proximo_envio está mais de 30 minutos no passado, avançar
+    // Se proximo_envio está mais de 6 HORAS no passado, avançar
     // para o próximo horário válido sem tentar enviar.
     // Isso previne loop infinito de retentativas quando WhatsApp
-    // ficou desconectado por horas/dias.
+    // ficou desconectado por dias.
+    // NOTA: O bot reinicia a cada ~5h no GitHub Actions, então
+    // precisamos de uma janela maior que 5h para não perder agendamentos.
+    // A proteção contra envio duplicado no mesmo dia já existe abaixo
+    // via consulta ao historico_envios.
     // ========================================
-    const LIMITE_ATRASO_MS = 30 * 60 * 1000; // 30 minutos
+    const LIMITE_ATRASO_MS = 6 * 60 * 60 * 1000; // 6 horas
     
     for (const agendamento of agendamentos) {
       try {
         const proximoEnvioDate = new Date(agendamento.proximo_envio);
         const atrasoMs = agoraUTC - proximoEnvioDate;
 
-        // Se o agendamento está mais de 30 min atrasado, avançar sem enviar
+        // Se o agendamento está mais de 6h atrasado, avançar sem enviar
         if (atrasoMs > LIMITE_ATRASO_MS) {
-          console.log(`\n⏭️ Agendamento ${agendamento.id.substring(0, 8)}... está ${Math.floor(atrasoMs / 60000)} min atrasado. Avançando para próximo horário.`);
+          console.log(`\n⏭️ Agendamento ${agendamento.id.substring(0, 8)}... está ${Math.floor(atrasoMs / 60000)} min atrasado (>${Math.floor(LIMITE_ATRASO_MS / 3600000)}h). Avançando para próximo horário.`);
           
           const proximoEnvio = calcularProximoEnvio(
             agendamento.hora_envio,

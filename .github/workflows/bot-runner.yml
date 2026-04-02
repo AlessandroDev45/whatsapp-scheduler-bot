@@ -17,6 +17,11 @@ on:
           - 'false'
           - 'true'
 
+# CRÍTICO: Impedir que 2 bots rodem ao mesmo tempo (causa "Connection Closed")
+concurrency:
+  group: whatsapp-bot
+  cancel-in-progress: true
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
