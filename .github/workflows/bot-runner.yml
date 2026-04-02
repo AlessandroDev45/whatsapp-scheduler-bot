@@ -155,9 +155,28 @@ jobs:
           echo "⏱️ Tempo esgotado — encerrando"
 
       # ── 9. Salvar sessão WhatsApp no cache ───────────────────
+      - name: Verificar saúde da sessão antes de salvar
+        id: check-session
+        if: always()
+        run: |
+          AUTH_DIR="whatsapp-scheduler-bot/bot/auth_info"
+          if [ -f "$AUTH_DIR/creds.json" ]; then
+            # Verificar se o bot estava em loop de reconexão (sessão corrompida)
+            if grep -c "SESSÃO CORROMPIDA DETECTADA" /tmp/bot.log 2>/dev/null; then
+              echo "🔴 Sessão corrompida detectada nos logs — NÃO salvando cache"
+              echo "healthy=false" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Sessão parece saudável — salvando cache"
+              echo "healthy=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ Nenhuma sessão encontrada"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Salvar sessão WhatsApp no cache
         uses: actions/cache/save@v4
-        if: always()
+        if: always() && steps.check-session.outputs.healthy == 'true'
         with:
           path: whatsapp-scheduler-bot/bot/auth_info
           key: whatsapp-auth-session-${{ github.run_id }}

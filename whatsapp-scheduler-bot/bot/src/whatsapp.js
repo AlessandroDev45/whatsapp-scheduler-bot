@@ -14,6 +14,10 @@ let qrCodeData = null;
 let connected = false;
 let reconnecting = false;
 let keepAliveInterval = null;
+let reconnectAttempts = 0;
+let consecutiveCloseCount = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const MAX_CONSECUTIVE_CLOSES = 5; // Se fechar 5x seguidas em <30s, sessão está corrompida
 
 const logger = pino({ level: 'silent' }); // Silenciar logs internos
 
@@ -107,11 +111,20 @@ export async function initWhatsApp() {
 
       connected = false;
       stopKeepAlive();
-      console.log(`❌ Conexão fechada. Status: ${statusCode}, LoggedOut: ${isLoggedOut}`);
+      reconnectAttempts++;
+      consecutiveCloseCount++;
+      console.log(`❌ Conexão fechada. Status: ${statusCode}, LoggedOut: ${isLoggedOut}, Tentativa: ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}, Closes consecutivos: ${consecutiveCloseCount}`);
 
-      if (isLoggedOut) {
-        // Sessão expirada/inválida — limpar auth_info e reconectar para gerar novo QR
-        console.log('🔑 Sessão expirada! Limpando auth_info para gerar novo QR Code...');
+      // Detectar sessão corrompida: status 440 ou loop de reconexão rápida
+      const isCorruptedSession = statusCode === 440 && consecutiveCloseCount >= MAX_CONSECUTIVE_CLOSES;
+
+      if (isLoggedOut || isCorruptedSession) {
+        if (isCorruptedSession) {
+          console.log(`🔴 SESSÃO CORROMPIDA DETECTADA! ${consecutiveCloseCount} desconexões consecutivas com status 440.`);
+          console.log('🔴 Isso geralmente acontece quando 2 bots rodaram ao mesmo tempo.');
+        }
+        // Sessão expirada/corrompida — limpar auth_info e reconectar para gerar novo QR
+        console.log('🔑 Limpando auth_info para gerar novo QR Code...');
         try {
           const fs = await import('fs');
           const path = await import('path');
@@ -126,16 +139,41 @@ export async function initWhatsApp() {
         } catch (err) {
           console.error('⚠️ Erro ao limpar auth_info:', err.message);
         }
+        reconnectAttempts = 0;
+        consecutiveCloseCount = 0;
         console.log('🔄 Reconectando em 5 segundos para gerar novo QR Code...');
         setTimeout(() => initWhatsApp(), 5000);
+      } else if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+        // Backoff exponencial: 3s, 6s, 12s, 24s... até máximo de 60s
+        const delay = Math.min(3000 * Math.pow(2, reconnectAttempts - 1), 60000);
+        console.log(`🔄 Reconectando em ${Math.round(delay/1000)}s (tentativa ${reconnectAttempts})...`);
+        setTimeout(() => initWhatsApp(), delay);
       } else {
-        // Outro erro (rede, timeout, etc) — reconectar normalmente
-        console.log('🔄 Reconectando em 3 segundos...');
-        setTimeout(() => initWhatsApp(), 3000);
+        console.log(`🔴 EXCEDEU ${MAX_RECONNECT_ATTEMPTS} tentativas de reconexão.`);
+        console.log('🔴 Limpando sessão corrompida e tentando do zero...');
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          const authPath = process.env.AUTH_INFO_PATH || './auth_info';
+          if (fs.existsSync(authPath)) {
+            const files = fs.readdirSync(authPath);
+            for (const file of files) {
+              fs.unlinkSync(path.join(authPath, file));
+            }
+          }
+        } catch (err) {
+          console.error('⚠️ Erro ao limpar auth_info:', err.message);
+        }
+        reconnectAttempts = 0;
+        consecutiveCloseCount = 0;
+        console.log('🔄 Reconectando em 10 segundos para gerar novo QR Code...');
+        setTimeout(() => initWhatsApp(), 10000);
       }
     } else if (connection === 'open') {
       connected = true;
       reconnecting = false;
+      reconnectAttempts = 0;
+      consecutiveCloseCount = 0;
       startKeepAlive();
       console.log('\n');
       console.log('═══════════════════════════════════════════════════════');
