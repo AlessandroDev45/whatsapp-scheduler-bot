@@ -201,11 +201,15 @@ jobs:
           AUTH_DIR="whatsapp-scheduler-bot/bot/auth_info"
           if [ -f "$AUTH_DIR/creds.json" ]; then
             # Verificar se o bot estava em loop de reconexão (sessão corrompida)
+            BAD_MAC_COUNT=$(grep -c "Bad MAC" /tmp/bot.log 2>/dev/null || echo "0")
             if grep -c "SESSÃO CORROMPIDA DETECTADA" /tmp/bot.log 2>/dev/null; then
               echo "🔴 Sessão corrompida detectada nos logs — NÃO salvando cache"
               echo "healthy=false" >> $GITHUB_OUTPUT
+            elif [ "$BAD_MAC_COUNT" -gt 10 ]; then
+              echo "🔴 Muitos Bad MAC errors ($BAD_MAC_COUNT) — sessão corrompida, NÃO salvando"
+              echo "healthy=false" >> $GITHUB_OUTPUT
             else
-              echo "✅ Sessão parece saudável — salvando cache"
+              echo "✅ Sessão parece saudável (Bad MAC: $BAD_MAC_COUNT) — salvando cache"
               echo "healthy=true" >> $GITHUB_OUTPUT
             fi
           else
