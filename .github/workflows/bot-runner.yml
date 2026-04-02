@@ -128,23 +128,62 @@ jobs:
 
           # Atualizar secret BOT_API_URL na Edge Function do Supabase
           echo "🔄 Atualizando BOT_API_URL na Edge Function..."
+          echo "🔗 Nova URL do bot: $TUNNEL_URL"
+
+          # Método 1: Tentar via Edge Function __secrets (pode não funcionar)
           HTTP_STATUS=$(curl -s -o /tmp/supabase_resp.txt -w "%{http_code}" \
             -X POST "${{ secrets.SUPABASE_URL }}/functions/v1/webhook-whatsapp/__secrets" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}" \
             -H "Content-Type: application/json" \
             -d "{\"name\":\"BOT_API_URL\",\"value\":\"$TUNNEL_URL\"}" || true)
+          echo "Método 1 (Edge Function __secrets) status: $HTTP_STATUS"
+          cat /tmp/supabase_resp.txt 2>/dev/null || true
+          echo ""
 
-          # Usar Management API para setar secret no projeto
-          HTTP_STATUS=$(curl -s -o /tmp/sb_secret_resp.txt -w "%{http_code}" \
-            -X POST "https://api.supabase.com/v1/projects/${{ secrets.SUPABASE_PROJECT_ID }}/secrets" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_ACCESS_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "[{\"name\":\"BOT_API_URL\",\"value\":\"$TUNNEL_URL\"}]")
+          # Método 2: Usar Management API para setar secret no projeto
+          if [ -n "${{ secrets.SUPABASE_ACCESS_TOKEN }}" ] && [ -n "${{ secrets.SUPABASE_PROJECT_ID }}" ]; then
+            HTTP_STATUS=$(curl -s -o /tmp/sb_secret_resp.txt -w "%{http_code}" \
+              -X POST "https://api.supabase.com/v1/projects/${{ secrets.SUPABASE_PROJECT_ID }}/secrets" \
+              -H "Authorization: Bearer ${{ secrets.SUPABASE_ACCESS_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "[{\"name\":\"BOT_API_URL\",\"value\":\"$TUNNEL_URL\"}]")
+            echo "Método 2 (Management API) status: $HTTP_STATUS"
+            cat /tmp/sb_secret_resp.txt 2>/dev/null || true
+            echo ""
+          else
+            echo "⚠️ SUPABASE_ACCESS_TOKEN ou SUPABASE_PROJECT_ID não configurados!"
+            echo "⚠️ O BOT_API_URL NÃO será atualizado automaticamente."
+            echo "⚠️ A Edge Function não vai conseguir responder aos comandos!"
+          fi
 
-          echo "Supabase secret update status: $HTTP_STATUS"
-          cat /tmp/sb_secret_resp.txt || true
+          # Método 3: Verificar se o túnel está acessível
+          echo "🔍 Testando acesso ao túnel..."
+          HEALTH=$(curl -sf "$TUNNEL_URL/health" 2>/dev/null || echo "FALHOU")
+          echo "Health check via túnel: $HEALTH"
 
       # ── 8. Manter bot rodando até timeout ────────────────────
+      - name: Verificar se Edge Function consegue chamar o bot
+        run: |
+          echo "🔍 Testando comunicação Edge Function → Bot..."
+          echo "   Tunnel URL: $TUNNEL_URL"
+          
+          # Testar se o tunnel responde
+          HEALTH=$(curl -sf "$TUNNEL_URL/health" 2>&1 || echo "ERRO")
+          echo "   Health check: $HEALTH"
+          
+          # Testar se o Supabase pode enviar webhook
+          echo ""
+          echo "🔍 Testando se Edge Function responde..."
+          EDGE_RESP=$(curl -sf "${{ secrets.SUPABASE_URL }}/functions/v1/webhook-whatsapp" \
+            -X OPTIONS \
+            -H "Origin: https://test.com" 2>&1 || echo "ERRO")
+          echo "   Edge Function OPTIONS: $EDGE_RESP"
+          
+          echo ""
+          echo "✅ URLs configuradas:"
+          echo "   Bot API (tunnel): $TUNNEL_URL"
+          echo "   Webhook: ${{ secrets.SUPABASE_URL }}/functions/v1/webhook-whatsapp"
+
       - name: Manter bot ativo
         run: |
           echo "🤖 Bot rodando com túnel: $TUNNEL_URL"
