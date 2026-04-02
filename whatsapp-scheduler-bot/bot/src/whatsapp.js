@@ -195,11 +195,31 @@ export async function initWhatsApp() {
   sock.ev.on('creds.update', saveCreds);
   
   // Evento: Mensagens recebidas
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+  sock.ev.on('messages.upsert', async (upsert) => {
+    console.log(`\n🔔 [UPSERT] Evento messages.upsert recebido!`);
+    console.log(`🔔 [UPSERT] Type: ${upsert.type}, Messages: ${upsert.messages?.length || 0}`);
     
-    for (const message of messages) {
-      if (message.key.fromMe) continue; // Ignorar mensagens enviadas pelo bot
+    const { messages: msgs, type: upsertType } = upsert;
+    
+    if (upsertType !== 'notify') {
+      console.log(`⏭️ [UPSERT] Ignorando type="${upsertType}" (não é notify)`);
+      return;
+    }
+    
+    for (const message of msgs) {
+      console.log(`🔔 [UPSERT] Mensagem de: ${message.key?.remoteJid}, fromMe: ${message.key?.fromMe}, id: ${message.key?.id}`);
+      console.log(`🔔 [UPSERT] pushName: ${message.pushName}, hasMessage: ${!!message.message}`);
+      console.log(`🔔 [UPSERT] messageKeys: ${message.message ? Object.keys(message.message).join(', ') : 'NENHUM'}`);
+      
+      if (message.key.fromMe) {
+        console.log(`⏭️ [UPSERT] Ignorando mensagem própria (fromMe=true)`);
+        continue;
+      }
+      
+      if (!message.message) {
+        console.log(`⏭️ [UPSERT] Ignorando mensagem sem conteúdo (message.message é null/undefined)`);
+        continue;
+      }
       
       try {
         await processIncomingMessage(sock, message);
