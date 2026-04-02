@@ -212,8 +212,16 @@ export async function initWhatsApp() {
       console.log(`🔔 [UPSERT] messageKeys: ${message.message ? Object.keys(message.message).join(', ') : 'NENHUM'}`);
       
       if (message.key.fromMe) {
-        console.log(`⏭️ [UPSERT] Ignorando mensagem própria (fromMe=true)`);
-        continue;
+        // Permitir comandos (/) mesmo quando fromMe, para o admin poder usar
+        const msgContent = message.message;
+        const msgText = msgContent?.conversation 
+          || msgContent?.extendedTextMessage?.text 
+          || '';
+        if (!msgText.startsWith('/')) {
+          console.log(`⏭️ [UPSERT] Ignorando mensagem própria (fromMe=true, não é comando)`);
+          continue;
+        }
+        console.log(`✅ [UPSERT] Mensagem própria MAS é comando: "${msgText}" — processando!`);
       }
       
       if (!message.message) {
