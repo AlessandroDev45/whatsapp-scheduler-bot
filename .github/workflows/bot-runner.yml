@@ -30,11 +30,11 @@ jobs:
     steps:
       # ── 1. Código ────────────────────────────────────────────
       - name: Checkout código
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v4
 
       # ── 2. Node.js ──────────────────────────────────────────
       - name: Instalar Node.js 20
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
@@ -46,7 +46,7 @@ jobs:
       # ── 4. Restaurar sessão WhatsApp do cache ────────────────
       - name: Restaurar sessão WhatsApp
         if: ${{ github.event.inputs.force_new_session != 'true' }}
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache/restore@v4
         id: cache-restore
         with:
           path: whatsapp-scheduler-bot/bot/auth_info
@@ -156,7 +156,7 @@ jobs:
 
       # ── 9. Salvar sessão WhatsApp no cache ───────────────────
       - name: Salvar sessão WhatsApp no cache
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache/save@v4
         if: always()
         with:
           path: whatsapp-scheduler-bot/bot/auth_info
