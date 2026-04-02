@@ -176,7 +176,30 @@ async function processarAgendamentos() {
     }
 
     if (!agendamentos || agendamentos.length === 0) {
-      console.log('✅ Nenhum agendamento pendente.');
+      console.log('✅ Nenhum agendamento pendente para AGORA.');
+      
+      // Mostrar próximos agendamentos ativos
+      const { data: proximosAgendamentos, error: errProx } = await supabase
+        .from('agendamentos')
+        .select('id, destinatario_nome, destinatario_id, hora_envio, dias_semana, proximo_envio')
+        .eq('ativo', true)
+        .order('proximo_envio', { ascending: true });
+
+      if (!errProx && proximosAgendamentos && proximosAgendamentos.length > 0) {
+        console.log(`\n📋 Próximos agendamentos ativos (${proximosAgendamentos.length}):`);
+        proximosAgendamentos.forEach(a => {
+          const proxEnvio = a.proximo_envio 
+            ? new Date(a.proximo_envio).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+            : 'não calculado';
+          const diasStr = a.dias_semana ? `dias: [${a.dias_semana}]` : 'todos os dias';
+          console.log(`   📌 ${a.destinatario_nome || a.destinatario_id} → ${a.hora_envio} (${diasStr}) → Próximo: ${proxEnvio}`);
+        });
+        console.log('');
+      } else if (errProx) {
+        console.log(`⚠️ Erro ao buscar próximos agendamentos: ${errProx.message}`);
+      } else {
+        console.log('⚠️ Nenhum agendamento ativo encontrado no banco.');
+      }
       return;
     }
     
